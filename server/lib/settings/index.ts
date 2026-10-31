@@ -65,6 +65,19 @@ export interface TautulliSettings {
   externalUrl?: string;
 }
 
+export type AiProvider = 'anthropic' | 'openai' | 'gemini';
+
+export interface AiSettings {
+  enabled: boolean;
+  provider: AiProvider;
+  apiKey: string;
+  model: string;
+  // Only used by the OpenAI-compatible provider (OpenAI, Ollama, LM Studio, OpenRouter...)
+  baseUrl: string;
+  // How long a user's recommendations are cached before asking the AI again
+  cacheHours: number;
+}
+
 export interface DVRSettings {
   id: number;
   name: string;
@@ -219,6 +232,7 @@ interface FullPublicSettings extends PublicSettings {
   youtubeUrl: string;
   versionCheck: boolean;
   plexClientIdentifier: string;
+  aiRecommendationsEnabled: boolean;
 }
 
 export interface NotificationAgentConfig {
@@ -383,6 +397,7 @@ export interface AllSettings {
   plex: PlexSettings;
   jellyfin: JellyfinSettings;
   tautulli: TautulliSettings;
+  ai: AiSettings;
   radarr: RadarrSettings[];
   sonarr: SonarrSettings[];
   public: PublicSettings;
@@ -457,6 +472,14 @@ class Settings {
         apiKey: '',
       },
       tautulli: {},
+      ai: {
+        enabled: false,
+        provider: 'anthropic',
+        apiKey: '',
+        model: 'claude-opus-5-5',
+        baseUrl: '',
+        cacheHours: 24,
+      },
       metadataSettings: {
         tv: MetadataProviderType.TMDB,
         anime: MetadataProviderType.TMDB,
@@ -675,6 +698,14 @@ class Settings {
     this.data.tautulli = mergeSettings(this.data.tautulli, data);
   }
 
+  get ai(): AiSettings {
+    return this.data.ai;
+  }
+
+  set ai(data: AiSettings) {
+    this.data.ai = mergeSettings(this.data.ai, data);
+  }
+
   get metadataSettings(): MetadataSettings {
     return this.data.metadataSettings;
   }
@@ -745,6 +776,7 @@ class Settings {
       youtubeUrl: this.data.main.youtubeUrl,
       versionCheck: this.data.main.versionCheck,
       plexClientIdentifier: this.data.clientId,
+      aiRecommendationsEnabled: this.data.ai.enabled,
     };
   }
 

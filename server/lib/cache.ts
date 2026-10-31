@@ -10,7 +10,8 @@ export type AvailableCacheIds =
   | 'github'
   | 'plextv'
   | 'plexwatchlist'
-  | 'tvdb';
+  | 'tvdb'
+  | 'ai';
 
 const DEFAULT_TTL = 300;
 
@@ -249,6 +250,11 @@ class CacheManager {
     tvdb: new Cache('tvdb', 'The TVDB API', {
       stdTtl: 21600,
       max: TVDB_MAX_KEYS,
+    }),
+    // One entry per user; TTL is set per entry from the AI settings
+    ai: new Cache('ai', 'AI Recommendations', {
+      stdTtl: 86400,
+      max: 1000,
     }),
   };
 

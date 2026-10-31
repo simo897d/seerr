@@ -13,6 +13,7 @@ import type {
   GenreSliderItem,
   WatchlistResponse,
 } from '@server/interfaces/api/discoverInterfaces';
+import { getAiRecommendations } from '@server/lib/ai/recommendations';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { mapProductionCompany } from '@server/models/Movie';
@@ -798,6 +799,55 @@ discoverRoutes.get('/trending', async (req, res, next) => {
     return next({
       status: 500,
       message: 'Unable to retrieve trending items.',
+    });
+  }
+});
+
+discoverRoutes.get('/recommended', async (req, res, next) => {
+  const empty = { page: 1, totalPages: 1, totalResults: 0, results: [] };
+
+  // Everything fits on one page; later pages are always empty
+  if (!getSettings().ai.enabled || !req.user || Number(req.query.page) > 1) {
+    return res.status(200).json(empty);
+  }
+
+  try {
+    const recommendations = await getAiRecommendations(req.user, {
+      language: req.locale,
+    });
+
+    const media = await Media.getRelatedMedia(
+      req.user,
+      recommendations.map((item) => ({
+        tmdbId: item.result.id,
+        mediaType: item.mediaType === 'movie' ? MediaType.MOVIE : MediaType.TV,
+      })),
+      { includeActiveRequest: true }
+    );
+
+    return res.status(200).json({
+      ...empty,
+      totalResults: recommendations.length,
+      results: recommendations.map((item) => {
+        const type =
+          item.mediaType === 'movie' ? MediaType.MOVIE : MediaType.TV;
+        const selectedMedia = media.find(
+          (med) => med.tmdbId === item.result.id && med.mediaType === type
+        );
+
+        return item.mediaType === 'movie'
+          ? mapMovieResult(item.result, selectedMedia)
+          : mapTvResult(item.result, selectedMedia);
+      }),
+    });
+  } catch (e) {
+    logger.error('Something went wrong generating AI recommendations', {
+      label: 'AI Recommendations',
+      errorMessage: e.message,
+    });
+    return next({
+      status: 500,
+      message: 'Unable to generate recommendations.',
     });
   }
 });

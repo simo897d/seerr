@@ -169,6 +169,8 @@ const DiscoverSliderEdit = ({
         return intl.formatMessage(sliderTitles.tmdbmoviestreamingservices);
       case DiscoverSliderType.TMDB_TV_STREAMING_SERVICES:
         return intl.formatMessage(sliderTitles.tmdbtvstreamingservices);
+      case DiscoverSliderType.AI_RECOMMENDATIONS:
+        return intl.formatMessage(sliderTitles.airecommendations);
       default:
         return 'Unknown Slider';
     }

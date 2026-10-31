@@ -130,6 +130,21 @@ export interface JellyfinLibraryItemExtended extends JellyfinLibraryItem {
   DateCreated?: string;
 }
 
+export interface JellyfinWatchedItem {
+  name: string;
+  type: 'movie' | 'tv';
+  year?: number;
+  tmdbId?: number;
+  genres: string[];
+  favorite: boolean;
+}
+
+interface JellyfinUserItem extends JellyfinLibraryItemExtended {
+  ProductionYear?: number;
+  Genres?: string[];
+  UserData?: { IsFavorite?: boolean; Played?: boolean };
+}
+
 type EpisodeReturn<T> = T extends { includeMediaInfo: true }
   ? JellyfinLibraryItemExtended[]
   : JellyfinLibraryItem[];
@@ -487,6 +502,115 @@ class JellyfinAPI extends ExternalAPI {
     } catch (e) {
       logger.error(
         `Something went wrong while getting library content from the Jellyfin server: ${e.message}`,
+        { label: 'Jellyfin API', error: e.response?.status }
+      );
+
+      if (!e.response) {
+        throw new ApiError(502, ApiErrorCode.ConnectionError);
+      }
+
+      throw new ApiError(e.response.status, ApiErrorCode.InvalidAuthToken);
+    }
+  }
+
+  /**
+   * Returns what a user has recently watched, newest first: played movies,
+   * series with played episodes, and anything marked as a favorite.
+   * Requires an admin API key so that any user's history can be read.
+   */
+  public async getUserWatchHistory(
+    userId: string,
+    { movieLimit = 40, seriesLimit = 25 } = {}
+  ): Promise<JellyfinWatchedItem[]> {
+    // Jellyfin 10.9+ takes userId as a query param; Emby still uses /Users/{id}/Items
+    const getItems = (params: Record<string, string | number>) =>
+      this.mediaServerType === MediaServerType.JELLYFIN
+        ? this.get<{ Items: JellyfinUserItem[] }>('/Items', {
+            params: { ...params, userId },
+          })
+        : this.get<{ Items: JellyfinUserItem[] }>(`/Users/${userId}/Items`, {
+            params,
+          });
+
+    const fields = 'ProviderIds,Genres,ProductionYear';
+
+    try {
+      const [movies, episodes, favorites] = await Promise.all([
+        getItems({
+          IncludeItemTypes: 'Movie',
+          Filters: 'IsPlayed',
+          SortBy: 'DatePlayed',
+          SortOrder: 'Descending',
+          Recursive: 'true',
+          Limit: movieLimit,
+          Fields: fields,
+        }),
+        // Series only count as "played" once every episode is watched, so
+        // look at played episodes instead and collect their series.
+        getItems({
+          IncludeItemTypes: 'Episode',
+          Filters: 'IsPlayed',
+          SortBy: 'DatePlayed',
+          SortOrder: 'Descending',
+          Recursive: 'true',
+          Limit: 400,
+        }),
+        getItems({
+          IncludeItemTypes: 'Movie,Series',
+          Filters: 'IsFavorite',
+          Recursive: 'true',
+          Limit: 50,
+          Fields: fields,
+        }),
+      ]);
+
+      const seriesIds = [
+        ...new Set(
+          episodes.Items.map((episode) => episode.SeriesId).filter(
+            (id): id is string => !!id
+          )
+        ),
+      ].slice(0, seriesLimit);
+
+      const series = seriesIds.length
+        ? (
+            await getItems({
+              Ids: seriesIds.join(','),
+              Fields: fields,
+            })
+          ).Items.sort(
+            (a, b) => seriesIds.indexOf(a.Id) - seriesIds.indexOf(b.Id)
+          )
+        : [];
+
+      const favoriteIds = new Set(favorites.Items.map((item) => item.Id));
+      const seen = new Set<string>();
+      const result: JellyfinWatchedItem[] = [];
+
+      for (const item of [...favorites.Items, ...movies.Items, ...series]) {
+        if (seen.has(item.Id)) {
+          continue;
+        }
+        seen.add(item.Id);
+
+        const tmdbId = Number(
+          item.ProviderIds?.Tmdb ?? item.ProviderIds?.TheMovieDb
+        );
+
+        result.push({
+          name: item.Name,
+          type: item.Type === 'Movie' ? 'movie' : 'tv',
+          year: item.ProductionYear,
+          tmdbId: tmdbId > 0 ? tmdbId : undefined,
+          genres: item.Genres ?? [],
+          favorite: favoriteIds.has(item.Id),
+        });
+      }
+
+      return result;
+    } catch (e) {
+      logger.error(
+        `Something went wrong while getting watch history from the Jellyfin server: ${e.message}`,
         { label: 'Jellyfin API', error: e.response?.status }
       );
 

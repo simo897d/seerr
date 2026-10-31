@@ -15,6 +15,7 @@ import type {
   SettingsAboutResponse,
 } from '@server/interfaces/api/settingsInterfaces';
 import { scheduledJobs } from '@server/job/schedule';
+import { getAiRecommendations } from '@server/lib/ai/recommendations';
 import type { AvailableCacheIds } from '@server/lib/cache';
 import cacheManager from '@server/lib/cache';
 import ImageProxy from '@server/lib/imageproxy';
@@ -529,6 +530,71 @@ settingsRoutes.post('/tautulli', async (req, res, next) => {
   }
 
   return res.status(200).json(settings.tautulli);
+});
+
+const AiSettingsSchema = z.object({
+  enabled: z.boolean(),
+  provider: z.enum(['anthropic', 'openai', 'gemini']),
+  apiKey: z.string(),
+  model: z.string().trim(),
+  baseUrl: z.string().trim(),
+  cacheHours: z
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 30),
+});
+
+settingsRoutes.get('/ai', (_req, res) => {
+  res.status(200).json(getSettings().ai);
+});
+
+settingsRoutes.post('/ai', async (req, res, next) => {
+  const parsed = AiSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return next({ status: 400, message: 'Invalid AI settings.' });
+  }
+
+  const settings = getSettings();
+  settings.ai = parsed.data;
+  await settings.save();
+
+  // Settings changed, so earlier recommendations may come from another model
+  cacheManager.getCache('ai').flush();
+
+  return res.status(200).json(settings.ai);
+});
+
+settingsRoutes.post('/ai/test', async (req, res, next) => {
+  const parsed = AiSettingsSchema.safeParse(req.body);
+  if (!parsed.success || !req.user) {
+    return next({ status: 400, message: 'Invalid AI settings.' });
+  }
+
+  try {
+    const recommendations = await getAiRecommendations(req.user, {
+      language: req.locale,
+      aiSettings: parsed.data,
+    });
+
+    return res.status(200).json({
+      count: recommendations.length,
+      titles: recommendations
+        .slice(0, 5)
+        .map((item) =>
+          item.mediaType === 'movie' ? item.result.title : item.result.name
+        ),
+    });
+  } catch (e) {
+    logger.error('AI recommendations test failed', {
+      label: 'AI Recommendations',
+      errorMessage: e.message,
+    });
+    return next({
+      status: 500,
+      message: e.response?.data?.error?.message ?? e.message,
+    });
+  }
 });
 
 settingsRoutes.get(

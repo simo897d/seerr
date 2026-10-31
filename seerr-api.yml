@@ -573,6 +573,35 @@ components:
         externalUrl:
           type: string
           nullable: true
+    AiSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          example: true
+        provider:
+          type: string
+          enum: [anthropic, openai, gemini]
+          example: anthropic
+        apiKey:
+          type: string
+        model:
+          type: string
+          example: claude-opus-5-5
+        baseUrl:
+          type: string
+          description: Only used by the OpenAI-compatible provider, e.g. http://localhost:11434/v1 for Ollama
+          example: ''
+        cacheHours:
+          type: number
+          example: 24
+      required:
+        - enabled
+        - provider
+        - apiKey
+        - model
+        - baseUrl
+        - cacheHours
     RadarrSettings:
       type: object
       properties:
@@ -2803,6 +2832,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TautulliSettings'
+  /settings/ai:
+    get:
+      summary: Get AI recommendation settings
+      description: Retrieves the current AI recommendation settings.
+      tags:
+        - settings
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiSettings'
+    post:
+      summary: Update AI recommendation settings
+      description: Updates the AI recommendation settings and clears cached recommendations.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiSettings'
+      responses:
+        '200':
+          description: 'Values were successfully updated'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiSettings'
+  /settings/ai/test:
+    post:
+      summary: Test AI recommendation settings
+      description: Generates recommendations for the current user with the provided (unsaved) settings.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiSettings'
+      responses:
+        '200':
+          description: Recommendations were generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: number
+                    example: 20
+                  titles:
+                    type: array
+                    items:
+                      type: string
   /settings/radarr:
     get:
       summary: Get Radarr settings
@@ -6463,6 +6550,42 @@ paths:
                     name:
                       type: string
                       example: Genre Name
+  /discover/recommended:
+    get:
+      summary: Get AI recommendations for the current user
+      description: Returns movies and series picked by the configured AI provider from the user's watch history, requests and watchlist. Results are cached per user.
+      tags:
+        - search
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: number
+            example: 1
+            default: 1
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page:
+                    type: number
+                    example: 1
+                  totalPages:
+                    type: number
+                    example: 1
+                  totalResults:
+                    type: number
+                    example: 20
+                  results:
+                    type: array
+                    items:
+                      anyOf:
+                        - $ref: '#/components/schemas/MovieResult'
+                        - $ref: '#/components/schemas/TvResult'
   /discover/watchlist:
     get:
       summary: Get the Plex watchlist.

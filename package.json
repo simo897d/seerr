@@ -34,6 +34,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@dr.pogodin/csurf": "^1.16.9",
     "@fontsource-variable/inter": "^5.2.8",
     "@formatjs/intl": "^4.1.4",
