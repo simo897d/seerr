@@ -22,6 +22,7 @@ import PersonCard from '@app/components/PersonCard';
 import RequestButton from '@app/components/RequestButton';
 import Slider from '@app/components/Slider';
 import StatusBadge from '@app/components/StatusBadge';
+import TitleFeedback from '@app/components/TitleFeedback';
 import useDeepLinks from '@app/hooks/useDeepLinks';
 import useLocale from '@app/hooks/useLocale';
 import useSettings from '@app/hooks/useSettings';
@@ -697,6 +698,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
               ? data.overview
               : intl.formatMessage(messages.overviewunavailable)}
           </p>
+          <TitleFeedback mediaType="movie" tmdbId={data.id} />
           {sortedCrew.length > 0 && (
             <>
               <ul className="media-crew">

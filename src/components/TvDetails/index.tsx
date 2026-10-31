@@ -24,6 +24,7 @@ import RequestButton from '@app/components/RequestButton';
 import RequestModal from '@app/components/RequestModal';
 import Slider from '@app/components/Slider';
 import StatusBadge from '@app/components/StatusBadge';
+import TitleFeedback from '@app/components/TitleFeedback';
 import Season from '@app/components/TvDetails/Season';
 import useDeepLinks from '@app/hooks/useDeepLinks';
 import useLocale from '@app/hooks/useLocale';
@@ -750,6 +751,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
               ? data.overview
               : intl.formatMessage(messages.overviewunavailable)}
           </p>
+          <TitleFeedback mediaType="tv" tmdbId={data.id} />
           {sortedCrew.length > 0 && (
             <>
               <ul className="media-crew">

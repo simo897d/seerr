@@ -142,7 +142,11 @@ export interface JellyfinWatchedItem {
 interface JellyfinUserItem extends JellyfinLibraryItemExtended {
   ProductionYear?: number;
   Genres?: string[];
-  UserData?: { IsFavorite?: boolean; Played?: boolean };
+  UserData?: {
+    IsFavorite?: boolean;
+    Played?: boolean;
+    LastPlayedDate?: string;
+  };
 }
 
 type EpisodeReturn<T> = T extends { includeMediaInfo: true }
@@ -517,11 +521,20 @@ class JellyfinAPI extends ExternalAPI {
    * Returns what a user has recently watched, newest first: played movies,
    * series with played episodes, and anything marked as a favorite.
    * Requires an admin API key so that any user's history can be read.
+   * Pass `libraryIds` to only look inside those libraries.
    */
   public async getUserWatchHistory(
     userId: string,
-    { movieLimit = 40, seriesLimit = 25 } = {}
+    {
+      movieLimit = 40,
+      seriesLimit = 25,
+      libraryIds,
+    }: { movieLimit?: number; seriesLimit?: number; libraryIds?: string[] } = {}
   ): Promise<JellyfinWatchedItem[]> {
+    if (libraryIds && !libraryIds.length) {
+      return [];
+    }
+
     // Jellyfin 10.9+ takes userId as a query param; Emby still uses /Users/{id}/Items
     const getItems = (params: Record<string, string | number>) =>
       this.mediaServerType === MediaServerType.JELLYFIN
@@ -532,11 +545,34 @@ class JellyfinAPI extends ExternalAPI {
             params,
           });
 
+    // Runs the query once per library when limited to some libraries, then
+    // merges the results back into newest-first order.
+    const query = async (
+      params: Record<string, string | number>
+    ): Promise<JellyfinUserItem[]> => {
+      if (!libraryIds) {
+        return (await getItems(params)).Items;
+      }
+
+      const perLibrary = await Promise.all(
+        libraryIds.map((ParentId) =>
+          getItems({ ...params, ParentId, EnableUserData: 'true' })
+        )
+      );
+      const lastPlayed = (item: JellyfinUserItem) =>
+        item.UserData?.LastPlayedDate ?? '';
+
+      return perLibrary
+        .flatMap((response) => response.Items)
+        .sort((a, b) => lastPlayed(b).localeCompare(lastPlayed(a)))
+        .slice(0, Number(params.Limit));
+    };
+
     const fields = 'ProviderIds,Genres,ProductionYear';
 
     try {
       const [movies, episodes, favorites] = await Promise.all([
-        getItems({
+        query({
           IncludeItemTypes: 'Movie',
           Filters: 'IsPlayed',
           SortBy: 'DatePlayed',
@@ -547,7 +583,7 @@ class JellyfinAPI extends ExternalAPI {
         }),
         // Series only count as "played" once every episode is watched, so
         // look at played episodes instead and collect their series.
-        getItems({
+        query({
           IncludeItemTypes: 'Episode',
           Filters: 'IsPlayed',
           SortBy: 'DatePlayed',
@@ -555,7 +591,7 @@ class JellyfinAPI extends ExternalAPI {
           Recursive: 'true',
           Limit: 400,
         }),
-        getItems({
+        query({
           IncludeItemTypes: 'Movie,Series',
           Filters: 'IsFavorite',
           Recursive: 'true',
@@ -566,9 +602,9 @@ class JellyfinAPI extends ExternalAPI {
 
       const seriesIds = [
         ...new Set(
-          episodes.Items.map((episode) => episode.SeriesId).filter(
-            (id): id is string => !!id
-          )
+          episodes
+            .map((episode) => episode.SeriesId)
+            .filter((id): id is string => !!id)
         ),
       ].slice(0, seriesLimit);
 
@@ -583,11 +619,11 @@ class JellyfinAPI extends ExternalAPI {
           )
         : [];
 
-      const favoriteIds = new Set(favorites.Items.map((item) => item.Id));
+      const favoriteIds = new Set(favorites.map((item) => item.Id));
       const seen = new Set<string>();
       const result: JellyfinWatchedItem[] = [];
 
-      for (const item of [...favorites.Items, ...movies.Items, ...series]) {
+      for (const item of [...favorites, ...movies, ...series]) {
         if (seen.has(item.Id)) {
           continue;
         }

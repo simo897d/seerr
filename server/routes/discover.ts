@@ -814,6 +814,7 @@ discoverRoutes.get('/recommended', async (req, res, next) => {
   try {
     const recommendations = await getAiRecommendations(req.user, {
       language: req.locale,
+      refresh: String(req.query.refresh) === 'true',
     });
 
     const media = await Media.getRelatedMedia(

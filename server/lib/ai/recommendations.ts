@@ -9,6 +9,7 @@ import { MediaType } from '@server/constants/media';
 import { MediaServerType } from '@server/constants/server';
 import { getRepository } from '@server/datasource';
 import { MediaRequest } from '@server/entity/MediaRequest';
+import { FeedbackStatus, TitleFeedback } from '@server/entity/TitleFeedback';
 import type { User } from '@server/entity/User';
 import { Watchlist } from '@server/entity/Watchlist';
 import type { AiRecommendation } from '@server/lib/ai/providers';
@@ -33,7 +34,10 @@ interface TasteItem {
 }
 
 interface TasteProfile {
+  liked: TasteItem[];
+  disliked: TasteItem[];
   watched: TasteItem[];
+  seenElsewhere: TasteItem[];
   requested: TasteItem[];
   watchlist: TasteItem[];
 }
@@ -41,8 +45,21 @@ interface TasteProfile {
 const MAX_RESULTS = 20;
 // Ask for more than we show, since some won't match TMDB or are already known
 const ASK_FOR = 30;
+// Kids profiles drop anything TMDB doesn't tag as family content, so ask for more
+const ASK_FOR_KIDS = 40;
 
-const inFlight = new Map<number, Promise<ResolvedRecommendation[]>>();
+// TMDB genre IDs
+const GENRE_FAMILY = 10751;
+const GENRE_KIDS = 10762;
+
+const inFlight = new Map<string, Promise<ResolvedRecommendation[]>>();
+// Bumped to drop a user's cached recommendations, e.g. after they change settings
+const generations = new Map<number, number>();
+
+const itemKey = (type: 'movie' | 'tv', tmdbId: number) => `${type}-${tmdbId}`;
+
+const feedbackType = (item: TitleFeedback) =>
+  item.mediaType === MediaType.MOVIE ? 'movie' : 'tv';
 
 const normalizeTitle = (title: string) =>
   title
@@ -74,7 +91,19 @@ const getJellyfinHistory = async (
 
   try {
     const jellyfin = new JellyfinAPI(getHostname(), settings.jellyfin.apiKey);
-    return await jellyfin.getUserWatchHistory(user.jellyfinUserId);
+    const excluded = user.settings?.aiExcludedLibraries ?? [];
+
+    let libraryIds: string[] | undefined;
+    if (excluded.length) {
+      const libraries = await jellyfin.getLibraries();
+      libraryIds = libraries
+        .map((library) => library.key)
+        .filter((id) => !excluded.includes(id));
+    }
+
+    return await jellyfin.getUserWatchHistory(user.jellyfinUserId, {
+      libraryIds,
+    });
   } catch (e) {
     logger.warn('Could not load watch history for AI recommendations', {
       label: 'AI Recommendations',
@@ -141,25 +170,57 @@ const getWatchlist = async (user: User): Promise<TasteItem[]> => {
   }));
 };
 
+export const getUserFeedback = (user: User) =>
+  getRepository(TitleFeedback).find({
+    where: { user: { id: user.id } },
+    order: { updatedAt: 'DESC' },
+  });
+
 const buildTasteProfile = async (
   user: User,
   tmdb: TheMovieDb
 ): Promise<TasteProfile> => {
-  const [history, requested, watchlist] = await Promise.all([
+  const [history, requested, watchlist, feedback] = await Promise.all([
     getJellyfinHistory(user),
     getRequestHistory(user, tmdb),
     getWatchlist(user),
+    getUserFeedback(user),
   ]);
 
+  const byStatus = (status: FeedbackStatus) =>
+    feedback
+      .filter((item) => item.status === status)
+      .map(
+        (item): TasteItem => ({
+          title: item.title,
+          type: feedbackType(item),
+          year: item.year ?? undefined,
+          tmdbId: item.tmdbId,
+        })
+      );
+
+  // Rated titles are listed with their rating, so leave them out of the
+  // plain watch history to avoid listing them twice.
+  const rated = new Set(
+    feedback.map((item) => itemKey(feedbackType(item), item.tmdbId))
+  );
+
   return {
-    watched: history.map((item) => ({
-      title: item.name,
-      type: item.type,
-      year: item.year,
-      tmdbId: item.tmdbId,
-      genres: item.genres,
-      favorite: item.favorite,
-    })),
+    liked: byStatus(FeedbackStatus.LIKED).slice(0, 40),
+    disliked: byStatus(FeedbackStatus.DISLIKED).slice(0, 40),
+    seenElsewhere: byStatus(FeedbackStatus.WATCHED).slice(0, 60),
+    watched: history
+      .filter(
+        (item) => !item.tmdbId || !rated.has(itemKey(item.type, item.tmdbId))
+      )
+      .map((item) => ({
+        title: item.name,
+        type: item.type,
+        year: item.year,
+        tmdbId: item.tmdbId,
+        genres: item.genres,
+        favorite: item.favorite,
+      })),
     requested,
     watchlist,
   };
@@ -185,15 +246,33 @@ You receive what a person has watched, marked as favorite, requested and added t
 Guidelines:
 - Infer their taste from the whole history: genres, tone, themes, era, creators and pacing. Weight favorites and recent items most.
 - Only suggest real, released titles that are listed on The Movie Database, using their original English title and first release year so they can be looked up.
-- Never suggest anything that already appears in their history.
+- Titles they rated thumbs up are the strongest signal of their taste. Titles they rated thumbs down show what to steer away from, so avoid close matches to those.
+- Never suggest anything that already appears anywhere in what you are given, including titles they disliked or have seen elsewhere.
 - Mix well-known picks with less obvious ones they probably haven't seen. Avoid only suggesting the most popular titles of all time.
 - Match the movie/TV balance of their history, but include some of each when the history has both.
 - Keep each reason to one short sentence that names what in their history it connects to.
 - Respond with JSON only.`;
 
-const buildPrompt = (profile: TasteProfile, language: string) => {
-  const sections: string[] = [];
+const KIDS_PROMPT = `
 
+This profile belongs to a young child. Only suggest titles made for children and families, rated G or PG for movies or TV-Y, TV-Y7 or TV-G for series. Never suggest anything with mature themes, strong violence, horror or sexual content, even if it is animated. If their history contains grown-up titles, ignore those.`;
+
+const buildPrompt = (
+  profile: TasteProfile,
+  language: string,
+  askFor: number
+) => {
+  const sections: string[] = [];
+  const list = (items: TasteItem[]) => items.map(formatItem).join('\n');
+
+  if (profile.liked.length) {
+    sections.push(`Rated thumbs up (loved these):\n${list(profile.liked)}`);
+  }
+  if (profile.disliked.length) {
+    sections.push(
+      `Rated thumbs down (not for them):\n${list(profile.disliked)}`
+    );
+  }
   if (profile.watched.length) {
     sections.push(
       `Recently watched and favorites (newest first):\n${profile.watched
@@ -212,9 +291,15 @@ const buildPrompt = (profile: TasteProfile, language: string) => {
     );
   }
 
+  if (profile.seenElsewhere.length) {
+    sections.push(
+      `Already seen elsewhere (no rating given):\n${list(profile.seenElsewhere)}`
+    );
+  }
+
   return `${sections.join('\n\n')}
 
-Suggest ${ASK_FOR} titles for this person. Write the reasons in the language with code "${language}".
+Suggest ${askFor} titles for this person. Write the reasons in the language with code "${language}".
 
 Return a JSON object shaped like:
 {"recommendations": [{"title": "...", "year": 2014, "mediaType": "movie" or "tv", "reason": "..."}]}`;
@@ -289,15 +374,30 @@ const mapWithConcurrency = async <T, R>(
   return results;
 };
 
+// Kids profiles only get titles TMDB tags as family (or kids, for series)
+const isKidFriendly = (item: ResolvedRecommendation) => {
+  if ('adult' in item.result && item.result.adult) {
+    return false;
+  }
+  const genres = item.result.genre_ids ?? [];
+  return item.mediaType === 'movie'
+    ? genres.includes(GENRE_FAMILY)
+    : genres.includes(GENRE_FAMILY) || genres.includes(GENRE_KIDS);
+};
+
 const generate = async (
   user: User,
   aiSettings: AiSettings,
   language: string
 ): Promise<ResolvedRecommendation[]> => {
   const tmdb = new TheMovieDb();
+  const kidsMode = !!user.settings?.aiKidsMode;
   const profile = await buildTasteProfile(user, tmdb);
   const known = [
+    ...profile.liked,
+    ...profile.disliked,
     ...profile.watched,
+    ...profile.seenElsewhere,
     ...profile.requested,
     ...profile.watchlist,
   ];
@@ -313,8 +413,8 @@ const generate = async (
   const started = Date.now();
   const suggestions = await askForRecommendations(
     aiSettings,
-    SYSTEM_PROMPT,
-    buildPrompt(profile, language)
+    kidsMode ? SYSTEM_PROMPT + KIDS_PROMPT : SYSTEM_PROMPT,
+    buildPrompt(profile, language, kidsMode ? ASK_FOR_KIDS : ASK_FOR)
   );
 
   const knownIds = new Set(
@@ -344,6 +444,9 @@ const generate = async (
       if (knownIds.has(key) || seen.has(key)) {
         return false;
       }
+      if (kidsMode && !isKidFriendly(item)) {
+        return false;
+      }
       seen.add(key);
       return true;
     }
@@ -354,6 +457,7 @@ const generate = async (
     userId: user.id,
     provider: aiSettings.provider,
     model: aiSettings.model,
+    kidsMode,
     suggested: suggestions.length,
     matched: recommendations.length,
     durationMs: Date.now() - started,
@@ -380,20 +484,32 @@ export const getAiRecommendations = async (
 
   const settings = getSettings().ai;
   const cache = cacheManager.getCache('ai').data;
-  const cacheKey = `user-${user.id}-${language}`;
+  const cacheKey = `user-${user.id}-${language}-${generations.get(user.id) ?? 0}`;
+
+  // Titles rated after the list was made drop out straight away; the
+  // ratings themselves shape the next list.
+  const withoutRated = async (list: ResolvedRecommendation[]) => {
+    const feedback = await getUserFeedback(user);
+    const rated = new Set(
+      feedback.map((item) => itemKey(feedbackType(item), item.tmdbId))
+    );
+    return list.filter(
+      (item) => !rated.has(itemKey(item.mediaType, item.result.id))
+    );
+  };
 
   if (!refresh) {
     const cached = cache.get<ResolvedRecommendation[]>(cacheKey);
     if (cached) {
-      return cached;
+      return withoutRated(cached);
     }
   }
 
   // Discover can ask for the same user's list several times while the first
   // request is still waiting on the AI; share that one request.
-  const pending = inFlight.get(user.id);
+  const pending = inFlight.get(cacheKey);
   if (pending) {
-    return pending;
+    return pending.then(withoutRated);
   }
 
   const request = generate(user, settings, language)
@@ -406,8 +522,16 @@ export const getAiRecommendations = async (
       cache.set(cacheKey, recommendations, ttl);
       return recommendations;
     })
-    .finally(() => inFlight.delete(user.id));
+    .finally(() => inFlight.delete(cacheKey));
 
-  inFlight.set(user.id, request);
-  return request;
+  inFlight.set(cacheKey, request);
+  return request.then(withoutRated);
+};
+
+/**
+ * Drops a user's cached recommendations so the next visit to Discover asks
+ * the AI again, e.g. after their AI settings change.
+ */
+export const clearAiRecommendations = (userId: number) => {
+  generations.set(userId, (generations.get(userId) ?? 0) + 1);
 };

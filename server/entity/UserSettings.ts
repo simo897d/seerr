@@ -85,6 +85,14 @@ export class UserSettings {
   @Column({ nullable: true })
   public watchlistSyncTv?: boolean;
 
+  // Only suggest child-friendly titles. Only admins can change this.
+  @Column({ default: false })
+  public aiKidsMode: boolean;
+
+  // Jellyfin/Emby library IDs to leave out of this user's AI taste profile
+  @Column({ type: 'text', nullable: true, transformer: jsonArrayTransformer })
+  public aiExcludedLibraries: string[];
+
   @Column({
     type: 'text',
     nullable: true,

@@ -7,9 +7,11 @@ import { getRepository } from '@server/datasource';
 import { User } from '@server/entity/User';
 import { UserSettings } from '@server/entity/UserSettings';
 import type {
+  UserSettingsAiResponse,
   UserSettingsGeneralResponse,
   UserSettingsNotificationsResponse,
 } from '@server/interfaces/api/userSettingsInterfaces';
+import { clearAiRecommendations } from '@server/lib/ai/recommendations';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -157,6 +159,114 @@ userSettingsRoutes.post<
         message: e.errorCode,
       });
     }
+    return next({ status: 500, message: e.message });
+  }
+});
+
+userSettingsRoutes.get<{ id: string }, UserSettingsAiResponse>(
+  '/ai',
+  isOwnProfileOrAdmin(),
+  async (req, res, next) => {
+    const settings = getSettings();
+
+    try {
+      const user = await getRepository(User).findOne({
+        where: { id: Number(req.params.id) },
+      });
+
+      if (!user) {
+        return next({ status: 404, message: 'User not found.' });
+      }
+
+      // Read live from the server so new libraries show up without a sync
+      let libraries: { id: string; name: string }[] = [];
+      if (
+        [MediaServerType.JELLYFIN, MediaServerType.EMBY].includes(
+          settings.main.mediaServerType
+        ) &&
+        settings.jellyfin.apiKey
+      ) {
+        try {
+          const jellyfin = new JellyfinAPI(
+            getHostname(),
+            settings.jellyfin.apiKey
+          );
+          libraries = (await jellyfin.getLibraries()).map((library) => ({
+            id: library.key,
+            name: library.title,
+          }));
+        } catch (e) {
+          logger.warn('Could not load libraries for AI settings', {
+            label: 'AI Recommendations',
+            errorMessage: e.message,
+          });
+        }
+      }
+
+      return res.status(200).json({
+        kidsMode: !!user.settings?.aiKidsMode,
+        excludedLibraries: user.settings?.aiExcludedLibraries ?? [],
+        libraries,
+      });
+    } catch (e) {
+      return next({ status: 500, message: e.message });
+    }
+  }
+);
+
+userSettingsRoutes.post<
+  { id: string },
+  UserSettingsAiResponse,
+  { kidsMode?: boolean; excludedLibraries?: string[] }
+>('/ai', isOwnProfileOrAdmin(), async (req, res, next) => {
+  const userRepository = getRepository(User);
+
+  try {
+    const user = await userRepository.findOne({
+      where: { id: Number(req.params.id) },
+    });
+
+    if (!user) {
+      return next({ status: 404, message: 'User not found.' });
+    }
+
+    if (user.id === 1 && req.user?.id !== 1) {
+      return next({
+        status: 403,
+        message: "You do not have permission to modify this user's settings.",
+      });
+    }
+
+    if (!user.settings) {
+      user.settings = new UserSettings({ user });
+    }
+
+    // Kids profiles are a parental control, so users can't turn them off themselves
+    if (
+      req.body.kidsMode !== undefined &&
+      req.body.kidsMode !== !!user.settings.aiKidsMode
+    ) {
+      if (!req.user?.hasPermission(Permission.MANAGE_USERS)) {
+        return next({
+          status: 403,
+          message: 'Only admins can change the kids profile setting.',
+        });
+      }
+      user.settings.aiKidsMode = req.body.kidsMode;
+    }
+
+    if (req.body.excludedLibraries) {
+      user.settings.aiExcludedLibraries = req.body.excludedLibraries;
+    }
+
+    const savedUser = await userRepository.save(user);
+    clearAiRecommendations(savedUser.id);
+
+    return res.status(200).json({
+      kidsMode: !!savedUser.settings?.aiKidsMode,
+      excludedLibraries: savedUser.settings?.aiExcludedLibraries ?? [],
+    });
+  } catch (e) {
     return next({ status: 500, message: e.message });
   }
 });

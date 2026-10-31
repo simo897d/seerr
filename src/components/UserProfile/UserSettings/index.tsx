@@ -21,6 +21,7 @@ const messages = defineMessages('components.UserProfile.UserSettings', {
   menuLinkedAccounts: 'Linked Accounts',
   menuNotifications: 'Notifications',
   menuPermissions: 'Permissions',
+  menuAi: 'AI Recommendations',
   unauthorizedDescription:
     "You do not have permission to modify this user's settings.",
 });
@@ -79,6 +80,12 @@ const UserSettings = ({ children }: UserSettingsProps) => {
             ? '/settings/notifications/discord'
             : '/settings/notifications/pushbullet',
       regex: /\/settings\/notifications/,
+    },
+    {
+      text: intl.formatMessage(messages.menuAi),
+      route: '/settings/ai',
+      regex: /\/settings\/ai/,
+      hidden: !settings.currentSettings.aiRecommendationsEnabled,
     },
     {
       text: intl.formatMessage(messages.menuPermissions),

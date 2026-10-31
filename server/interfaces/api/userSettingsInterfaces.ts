@@ -38,3 +38,9 @@ export interface UserSettingsNotificationsResponse {
   webPushEnabled?: boolean;
   notificationTypes: Partial<NotificationAgentTypes>;
 }
+
+export interface UserSettingsAiResponse {
+  kidsMode: boolean;
+  excludedLibraries: string[];
+  libraries?: { id: string; name: string }[];
+}

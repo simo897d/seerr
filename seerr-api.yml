@@ -573,6 +573,47 @@ components:
         externalUrl:
           type: string
           nullable: true
+    UserSettingsAi:
+      type: object
+      properties:
+        kidsMode:
+          type: boolean
+          description: Only recommend child-friendly titles
+        excludedLibraries:
+          type: array
+          description: Media server library IDs left out of the user's watch history
+          items:
+            type: string
+        libraries:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+    TitleFeedback:
+      type: object
+      properties:
+        tmdbId:
+          type: number
+          example: 603
+        mediaType:
+          type: string
+          enum: [movie, tv]
+        status:
+          type: string
+          enum: [watched, liked, disliked]
+        title:
+          type: string
+          example: The Matrix
+        year:
+          type: number
+          example: 1999
+        updatedAt:
+          type: string
+          example: '2026-10-31T12:00:00.000Z'
     AiSettings:
       type: object
       properties:
@@ -5152,6 +5193,105 @@ paths:
           description: Successfully removed collection from blocklist
         '500':
           description: Error removing collection from blocklist
+  /feedback:
+    get:
+      summary: Get the current user's title feedback
+      description: Returns every title the current user has marked as watched, liked or disliked, newest first.
+      tags:
+        - watchlist
+      responses:
+        '200':
+          description: Feedback returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TitleFeedback'
+  /feedback/{mediaType}/{tmdbId}:
+    get:
+      summary: Get the current user's feedback for a title
+      tags:
+        - watchlist
+      parameters:
+        - in: path
+          name: mediaType
+          required: true
+          schema:
+            type: string
+            enum: [movie, tv]
+        - in: path
+          name: tmdbId
+          required: true
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Feedback status returned (null if none)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    nullable: true
+                    enum: [watched, liked, disliked, null]
+    post:
+      summary: Mark a title as watched, liked or disliked
+      description: Used to tailor AI recommendations. Titles with feedback are never recommended.
+      tags:
+        - watchlist
+      parameters:
+        - in: path
+          name: mediaType
+          required: true
+          schema:
+            type: string
+            enum: [movie, tv]
+        - in: path
+          name: tmdbId
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [watched, liked, disliked]
+      responses:
+        '200':
+          description: Feedback saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TitleFeedback'
+    delete:
+      summary: Remove the current user's feedback for a title
+      tags:
+        - watchlist
+      parameters:
+        - in: path
+          name: mediaType
+          required: true
+          schema:
+            type: string
+            enum: [movie, tv]
+        - in: path
+          name: tmdbId
+          required: true
+          schema:
+            type: number
+      responses:
+        '204':
+          description: Feedback removed
   /watchlist:
     post:
       summary: Add media to watchlist
@@ -5512,6 +5652,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserSettingsNotifications'
+  /user/{userId}/settings/ai:
+    get:
+      summary: Get AI recommendation settings for a user
+      description: Returns the user's AI recommendation settings and the media server libraries they can leave out. Requires `MANAGE_USERS` permission if viewing other users.
+      tags:
+        - users
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: number
+      responses:
+        '200':
+          description: User AI settings returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettingsAi'
+    post:
+      summary: Update AI recommendation settings for a user
+      description: Updates the user's AI recommendation settings and clears their cached recommendations. Only users with `MANAGE_USERS` permission can change `kidsMode`.
+      tags:
+        - users
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kidsMode:
+                  type: boolean
+                excludedLibraries:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Updated user AI settings returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettingsAi'
   /user/{userId}/settings/permissions:
     get:
       summary: Get permission settings for a user
@@ -6553,10 +6743,16 @@ paths:
   /discover/recommended:
     get:
       summary: Get AI recommendations for the current user
-      description: Returns movies and series picked by the configured AI provider from the user's watch history, requests and watchlist. Results are cached per user.
+      description: Returns movies and series picked by the configured AI provider from the user's watch history, ratings, requests and watchlist. Results are cached per user.
       tags:
         - search
       parameters:
+        - in: query
+          name: refresh
+          description: Ask the AI for a new list instead of using the cached one
+          schema:
+            type: boolean
+            example: false
         - in: query
           name: page
           schema:
