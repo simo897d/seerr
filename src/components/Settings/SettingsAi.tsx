@@ -41,6 +41,13 @@ const messages = defineMessages('components.Settings.SettingsAi', {
   cacheHours: 'Refresh Every (Hours)',
   cacheHoursTip:
     'How long a user keeps the same recommendations before the AI is asked again',
+  chatEnabled: 'Enable Ask AI Chat',
+  chatEnabledTip:
+    'Adds an "Ask AI" page where users can ask things like "what should I watch tonight?". Limited to 40 messages per user per hour.',
+  chatModel: 'Chat Model',
+  chatModelTipAnthropic:
+    'Leave empty to use Claude Haiku 5.5, the cheapest Claude model (about a tenth of a cent per message)',
+  chatModelTipOther: 'Leave empty to use the same model as recommendations',
   validationApiKey: 'You must provide an API key',
   validationModel: 'You must provide a model',
   validationCacheHours: 'You must provide a number of hours between 1 and 720',
@@ -120,6 +127,8 @@ const SettingsAi = () => {
           model: data?.model ?? DEFAULT_MODELS.anthropic,
           baseUrl: data?.baseUrl ?? '',
           cacheHours: data?.cacheHours ?? 24,
+          chatEnabled: data?.chatEnabled ?? true,
+          chatModel: data?.chatModel ?? '',
         }}
         enableReinitialize
         validationSchema={AiSettingsSchema}
@@ -350,6 +359,45 @@ const SettingsAi = () => {
                     )}
                 </div>
               </div>
+              <div className="form-row">
+                <label htmlFor="chatEnabled" className="checkbox-label">
+                  {intl.formatMessage(messages.chatEnabled)}
+                  <span className="label-tip">
+                    {intl.formatMessage(messages.chatEnabledTip)}
+                  </span>
+                </label>
+                <div className="form-input-area">
+                  <Field type="checkbox" id="chatEnabled" name="chatEnabled" />
+                </div>
+              </div>
+              {values.chatEnabled && (
+                <div className="form-row">
+                  <label htmlFor="chatModel" className="text-label">
+                    {intl.formatMessage(messages.chatModel)}
+                    <span className="label-tip">
+                      {intl.formatMessage(
+                        values.provider === 'anthropic'
+                          ? messages.chatModelTipAnthropic
+                          : messages.chatModelTipOther
+                      )}
+                    </span>
+                  </label>
+                  <div className="form-input-area">
+                    <div className="form-input-field">
+                      <Field
+                        type="text"
+                        id="chatModel"
+                        name="chatModel"
+                        placeholder={
+                          values.provider === 'anthropic'
+                            ? 'claude-haiku-5-5'
+                            : values.model
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="actions">
                 <div className="flex justify-end">
                   <span className="ml-3 inline-flex rounded-md shadow-sm">

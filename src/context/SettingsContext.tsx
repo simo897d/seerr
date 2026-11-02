@@ -35,6 +35,7 @@ const defaultSettings = {
   versionCheck: true,
   plexClientIdentifier: '',
   aiRecommendationsEnabled: false,
+  aiChatEnabled: false,
 };
 
 export const SettingsContext = React.createContext<SettingsContextProps>({

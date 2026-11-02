@@ -28,6 +28,7 @@ import { getAppVersion, getCommitTag } from '@server/utils/appVersion';
 import restartFlag from '@server/utils/restartFlag';
 import { isPerson } from '@server/utils/typeHelpers';
 import { Router } from 'express';
+import aiRoutes from './ai';
 import authRoutes from './auth';
 import blocklistRoutes from './blocklist';
 import collectionRoutes from './collection';
@@ -160,6 +161,7 @@ router.use('/discover', isAuthenticated(), discoverRoutes);
 router.use('/request', isAuthenticated(), requestRoutes);
 router.use('/watchlist', isAuthenticated(), watchlistRoutes);
 router.use('/feedback', isAuthenticated(), feedbackRoutes);
+router.use('/ai', isAuthenticated(), aiRoutes);
 router.use('/blocklist', isAuthenticated(), blocklistRoutes);
 router.use(
   '/blacklist',

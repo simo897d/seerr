@@ -543,6 +543,8 @@ const AiSettingsSchema = z.object({
     .int()
     .min(1)
     .max(24 * 30),
+  chatEnabled: z.boolean().optional().default(true),
+  chatModel: z.string().trim().optional().default(''),
 });
 
 settingsRoutes.get('/ai', (_req, res) => {

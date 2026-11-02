@@ -76,6 +76,10 @@ export interface AiSettings {
   baseUrl: string;
   // How long a user's recommendations are cached before asking the AI again
   cacheHours: number;
+  // Lets users ask the AI questions like "what should I watch tonight?"
+  chatEnabled?: boolean;
+  // Model for chat; empty uses the cheapest Claude model, or `model` for other providers
+  chatModel?: string;
 }
 
 export interface DVRSettings {
@@ -233,6 +237,7 @@ interface FullPublicSettings extends PublicSettings {
   versionCheck: boolean;
   plexClientIdentifier: string;
   aiRecommendationsEnabled: boolean;
+  aiChatEnabled: boolean;
 }
 
 export interface NotificationAgentConfig {
@@ -479,6 +484,8 @@ class Settings {
         model: 'claude-opus-5-5',
         baseUrl: '',
         cacheHours: 24,
+        chatEnabled: true,
+        chatModel: '',
       },
       metadataSettings: {
         tv: MetadataProviderType.TMDB,
@@ -777,6 +784,7 @@ class Settings {
       versionCheck: this.data.main.versionCheck,
       plexClientIdentifier: this.data.clientId,
       aiRecommendationsEnabled: this.data.ai.enabled,
+      aiChatEnabled: this.data.ai.enabled && this.data.ai.chatEnabled !== false,
     };
   }
 

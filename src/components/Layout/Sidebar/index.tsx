@@ -1,10 +1,12 @@
 import Badge from '@app/components/Common/Badge';
 import VersionStatus from '@app/components/Layout/VersionStatus';
 import useClickOutside from '@app/hooks/useClickOutside';
+import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import defineMessages from '@app/utils/defineMessages';
 import { Transition, TransitionChild } from '@headlessui/react';
 import {
+  ChatBubbleLeftRightIcon,
   ClockIcon,
   CogIcon,
   ExclamationTriangleIcon,
@@ -26,6 +28,7 @@ export const menuMessages = defineMessages('components.Layout.Sidebar', {
   browsemovies: 'Movies',
   browsetv: 'Series',
   requests: 'Requests',
+  askai: 'Ask AI',
   blocklist: 'Blocklist',
   issues: 'Issues',
   users: 'Users',
@@ -50,6 +53,8 @@ interface SidebarLinkProps {
   requiredPermission?: Permission | Permission[];
   permissionType?: 'and' | 'or';
   dataTestId?: string;
+  // Only shown when AI chat is turned on
+  aiChat?: boolean;
 }
 
 const SidebarLinks: SidebarLinkProps[] = [
@@ -76,6 +81,13 @@ const SidebarLinks: SidebarLinkProps[] = [
     messagesKey: 'requests',
     svgIcon: <ClockIcon className="mr-3 h-6 w-6" />,
     activeRegExp: /^\/requests/,
+  },
+  {
+    href: '/ask',
+    messagesKey: 'askai',
+    svgIcon: <ChatBubbleLeftRightIcon className="mr-3 h-6 w-6" />,
+    activeRegExp: /^\/ask/,
+    aiChat: true,
   },
   {
     href: '/blocklist',
@@ -130,6 +142,10 @@ const Sidebar = ({
   const router = useRouter();
   const intl = useIntl();
   const { hasPermission } = useUser();
+  const settings = useSettings();
+  const visibleLinks = SidebarLinks.filter(
+    (link) => !link.aiChat || settings.currentSettings.aiChatEnabled
+  );
   useClickOutside(navRef, () => setClosed());
 
   useEffect(() => {
@@ -197,40 +213,42 @@ const Sidebar = ({
                       </span>
                     </div>
                     <nav className="mt-10 flex-1 space-y-4 px-4">
-                      {SidebarLinks.filter((link) =>
-                        link.requiredPermission
-                          ? hasPermission(link.requiredPermission, {
-                              type: link.permissionType ?? 'and',
-                            })
-                          : true
-                      ).map((sidebarLink) => {
-                        return (
-                          <Link
-                            key={`mobile-${sidebarLink.messagesKey}`}
-                            href={sidebarLink.href}
-                            as={sidebarLink.as}
-                            onClick={() => setClosed()}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                setClosed();
-                              }
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            className={`flex items-center rounded-md px-2 py-2 text-base font-medium leading-6 text-white transition duration-150 ease-in-out focus:outline-none ${
-                              router.pathname.match(sidebarLink.activeRegExp)
-                                ? 'bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500'
-                                : 'hover:bg-gray-700 focus:bg-gray-700'
-                            } `}
-                            data-testid={`${sidebarLink.dataTestId}-mobile`}
-                          >
-                            {sidebarLink.svgIcon}
-                            {intl.formatMessage(
-                              menuMessages[sidebarLink.messagesKey]
-                            )}
-                          </Link>
-                        );
-                      })}
+                      {visibleLinks
+                        .filter((link) =>
+                          link.requiredPermission
+                            ? hasPermission(link.requiredPermission, {
+                                type: link.permissionType ?? 'and',
+                              })
+                            : true
+                        )
+                        .map((sidebarLink) => {
+                          return (
+                            <Link
+                              key={`mobile-${sidebarLink.messagesKey}`}
+                              href={sidebarLink.href}
+                              as={sidebarLink.as}
+                              onClick={() => setClosed()}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  setClosed();
+                                }
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              className={`flex items-center rounded-md px-2 py-2 text-base font-medium leading-6 text-white transition duration-150 ease-in-out focus:outline-none ${
+                                router.pathname.match(sidebarLink.activeRegExp)
+                                  ? 'bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500'
+                                  : 'hover:bg-gray-700 focus:bg-gray-700'
+                              } `}
+                              data-testid={`${sidebarLink.dataTestId}-mobile`}
+                            >
+                              {sidebarLink.svgIcon}
+                              {intl.formatMessage(
+                                menuMessages[sidebarLink.messagesKey]
+                              )}
+                            </Link>
+                          );
+                        })}
                     </nav>
                     {hasPermission(Permission.ADMIN) && (
                       <div className="px-2">
@@ -265,62 +283,68 @@ const Sidebar = ({
                 </span>
               </div>
               <nav className="mt-8 flex-1 space-y-4 px-4">
-                {SidebarLinks.filter((link) =>
-                  link.requiredPermission
-                    ? hasPermission(link.requiredPermission, {
-                        type: link.permissionType ?? 'and',
-                      })
-                    : true
-                ).map((sidebarLink) => {
-                  return (
-                    <Link
-                      key={`desktop-${sidebarLink.messagesKey}`}
-                      href={sidebarLink.href}
-                      as={sidebarLink.as}
-                      className={`group flex items-center rounded-md px-2 py-2 text-lg font-medium leading-6 text-white transition duration-150 ease-in-out focus:outline-none ${
-                        router.pathname.match(sidebarLink.activeRegExp)
-                          ? 'bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500'
-                          : 'hover:bg-gray-700 focus:bg-gray-700'
-                      } `}
-                      data-testid={sidebarLink.dataTestId}
-                    >
-                      {sidebarLink.svgIcon}
-                      {intl.formatMessage(
-                        menuMessages[sidebarLink.messagesKey]
-                      )}
-                      {sidebarLink.messagesKey === 'requests' &&
-                        pendingRequestsCount > 0 &&
-                        hasPermission(Permission.MANAGE_REQUESTS) && (
-                          <div className="ml-auto flex">
-                            <Badge
-                              className={`rounded-md bg-gradient-to-br ${
-                                router.pathname.match(sidebarLink.activeRegExp)
-                                  ? 'border-indigo-600 from-indigo-700 to-purple-700'
-                                  : 'border-indigo-500 from-indigo-600 to-purple-600'
-                              }`}
-                            >
-                              {pendingRequestsCount}
-                            </Badge>
-                          </div>
+                {visibleLinks
+                  .filter((link) =>
+                    link.requiredPermission
+                      ? hasPermission(link.requiredPermission, {
+                          type: link.permissionType ?? 'and',
+                        })
+                      : true
+                  )
+                  .map((sidebarLink) => {
+                    return (
+                      <Link
+                        key={`desktop-${sidebarLink.messagesKey}`}
+                        href={sidebarLink.href}
+                        as={sidebarLink.as}
+                        className={`group flex items-center rounded-md px-2 py-2 text-lg font-medium leading-6 text-white transition duration-150 ease-in-out focus:outline-none ${
+                          router.pathname.match(sidebarLink.activeRegExp)
+                            ? 'bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500'
+                            : 'hover:bg-gray-700 focus:bg-gray-700'
+                        } `}
+                        data-testid={sidebarLink.dataTestId}
+                      >
+                        {sidebarLink.svgIcon}
+                        {intl.formatMessage(
+                          menuMessages[sidebarLink.messagesKey]
                         )}
-                      {sidebarLink.messagesKey === 'issues' &&
-                        openIssuesCount > 0 &&
-                        hasPermission(Permission.MANAGE_ISSUES) && (
-                          <div className="ml-auto flex">
-                            <Badge
-                              className={`rounded-md bg-gradient-to-br ${
-                                router.pathname.match(sidebarLink.activeRegExp)
-                                  ? 'border-indigo-600 from-indigo-700 to-purple-700'
-                                  : 'border-indigo-500 from-indigo-600 to-purple-600'
-                              }`}
-                            >
-                              {openIssuesCount}
-                            </Badge>
-                          </div>
-                        )}
-                    </Link>
-                  );
-                })}
+                        {sidebarLink.messagesKey === 'requests' &&
+                          pendingRequestsCount > 0 &&
+                          hasPermission(Permission.MANAGE_REQUESTS) && (
+                            <div className="ml-auto flex">
+                              <Badge
+                                className={`rounded-md bg-gradient-to-br ${
+                                  router.pathname.match(
+                                    sidebarLink.activeRegExp
+                                  )
+                                    ? 'border-indigo-600 from-indigo-700 to-purple-700'
+                                    : 'border-indigo-500 from-indigo-600 to-purple-600'
+                                }`}
+                              >
+                                {pendingRequestsCount}
+                              </Badge>
+                            </div>
+                          )}
+                        {sidebarLink.messagesKey === 'issues' &&
+                          openIssuesCount > 0 &&
+                          hasPermission(Permission.MANAGE_ISSUES) && (
+                            <div className="ml-auto flex">
+                              <Badge
+                                className={`rounded-md bg-gradient-to-br ${
+                                  router.pathname.match(
+                                    sidebarLink.activeRegExp
+                                  )
+                                    ? 'border-indigo-600 from-indigo-700 to-purple-700'
+                                    : 'border-indigo-500 from-indigo-600 to-purple-600'
+                                }`}
+                              >
+                                {openIssuesCount}
+                              </Badge>
+                            </div>
+                          )}
+                      </Link>
+                    );
+                  })}
               </nav>
               {hasPermission(Permission.ADMIN) && (
                 <div className="px-2">

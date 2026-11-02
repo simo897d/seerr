@@ -265,6 +265,7 @@ CoreApp.getInitialProps = async (initialProps) => {
     versionCheck: true,
     plexClientIdentifier: '',
     aiRecommendationsEnabled: false,
+    aiChatEnabled: false,
   };
 
   if (ctx.res) {

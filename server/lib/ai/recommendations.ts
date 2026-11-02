@@ -1,4 +1,7 @@
-import type { JellyfinWatchedItem } from '@server/api/jellyfin';
+import type {
+  JellyfinLibraryTitle,
+  JellyfinWatchedItem,
+} from '@server/api/jellyfin';
 import JellyfinAPI from '@server/api/jellyfin';
 import TheMovieDb from '@server/api/themoviedb';
 import type {
@@ -33,7 +36,7 @@ interface TasteItem {
   favorite?: boolean;
 }
 
-interface TasteProfile {
+export interface TasteProfile {
   liked: TasteItem[];
   disliked: TasteItem[];
   watched: TasteItem[];
@@ -74,9 +77,9 @@ const yearOf = (date?: string) => {
   return Number.isFinite(year) ? year : undefined;
 };
 
-const getJellyfinHistory = async (
-  user: User
-): Promise<JellyfinWatchedItem[]> => {
+// Connects to Jellyfin/Emby as admin and works out which libraries to read
+// for this user (all of them, unless they chose to ignore some).
+const getJellyfinForUser = async (user: User) => {
   const settings = getSettings();
 
   if (
@@ -86,23 +89,58 @@ const getJellyfinHistory = async (
     !user.jellyfinUserId ||
     !settings.jellyfin.apiKey
   ) {
-    return [];
+    return undefined;
   }
 
+  const jellyfin = new JellyfinAPI(getHostname(), settings.jellyfin.apiKey);
+  const excluded = user.settings?.aiExcludedLibraries ?? [];
+
+  let libraryIds: string[] | undefined;
+  if (excluded.length) {
+    const libraries = await jellyfin.getLibraries();
+    libraryIds = libraries
+      .map((library) => library.key)
+      .filter((id) => !excluded.includes(id));
+  }
+
+  return { jellyfin, jellyfinUserId: user.jellyfinUserId, libraryIds };
+};
+
+/**
+ * Movies and series on the media server this user hasn't finished, for
+ * "what can I watch right now" questions.
+ */
+export const getUnwatchedOnServer = async (
+  user: User
+): Promise<JellyfinLibraryTitle[]> => {
   try {
-    const jellyfin = new JellyfinAPI(getHostname(), settings.jellyfin.apiKey);
-    const excluded = user.settings?.aiExcludedLibraries ?? [];
-
-    let libraryIds: string[] | undefined;
-    if (excluded.length) {
-      const libraries = await jellyfin.getLibraries();
-      libraryIds = libraries
-        .map((library) => library.key)
-        .filter((id) => !excluded.includes(id));
+    const server = await getJellyfinForUser(user);
+    if (!server) {
+      return [];
     }
+    return await server.jellyfin.getUnwatchedItems(server.jellyfinUserId, {
+      libraryIds: server.libraryIds,
+    });
+  } catch (e) {
+    logger.warn('Could not load unwatched titles for AI chat', {
+      label: 'AI Recommendations',
+      userId: user.id,
+      errorMessage: e.message,
+    });
+    return [];
+  }
+};
 
-    return await jellyfin.getUserWatchHistory(user.jellyfinUserId, {
-      libraryIds,
+const getJellyfinHistory = async (
+  user: User
+): Promise<JellyfinWatchedItem[]> => {
+  try {
+    const server = await getJellyfinForUser(user);
+    if (!server) {
+      return [];
+    }
+    return await server.jellyfin.getUserWatchHistory(server.jellyfinUserId, {
+      libraryIds: server.libraryIds,
     });
   } catch (e) {
     logger.warn('Could not load watch history for AI recommendations', {
@@ -176,7 +214,7 @@ export const getUserFeedback = (user: User) =>
     order: { updatedAt: 'DESC' },
   });
 
-const buildTasteProfile = async (
+export const buildTasteProfile = async (
   user: User,
   tmdb: TheMovieDb
 ): Promise<TasteProfile> => {
@@ -253,15 +291,12 @@ Guidelines:
 - Keep each reason to one short sentence that names what in their history it connects to.
 - Respond with JSON only.`;
 
-const KIDS_PROMPT = `
+export const KIDS_PROMPT = `
 
 This profile belongs to a young child. Only suggest titles made for children and families, rated G or PG for movies or TV-Y, TV-Y7 or TV-G for series. Never suggest anything with mature themes, strong violence, horror or sexual content, even if it is animated. If their history contains grown-up titles, ignore those.`;
 
-const buildPrompt = (
-  profile: TasteProfile,
-  language: string,
-  askFor: number
-) => {
+/** Describes what the user has watched, rated, requested and saved. */
+export const formatTasteProfile = (profile: TasteProfile) => {
   const sections: string[] = [];
   const list = (items: TasteItem[]) => items.map(formatItem).join('\n');
 
@@ -297,15 +332,46 @@ const buildPrompt = (
     );
   }
 
-  return `${sections.join('\n\n')}
+  return sections.join('\n\n');
+};
+
+const allItems = (profile: TasteProfile) => [
+  ...profile.liked,
+  ...profile.disliked,
+  ...profile.watched,
+  ...profile.seenElsewhere,
+  ...profile.requested,
+  ...profile.watchlist,
+];
+
+/** Every title in the profile, keyed like `movie-603`, so it isn't suggested again. */
+export const profileKeys = (profile: TasteProfile) => ({
+  ids: new Set(
+    allItems(profile)
+      .filter((item) => item.tmdbId)
+      .map((item) => `${item.type}-${item.tmdbId}`)
+  ),
+  titles: new Set(
+    allItems(profile).map(
+      (item) => `${item.type}-${normalizeTitle(item.title)}`
+    )
+  ),
+});
+
+export { normalizeTitle };
+
+const buildPrompt = (
+  profile: TasteProfile,
+  language: string,
+  askFor: number
+) => `${formatTasteProfile(profile)}
 
 Suggest ${askFor} titles for this person. Write the reasons in the language with code "${language}".
 
 Return a JSON object shaped like:
 {"recommendations": [{"title": "...", "year": 2014, "mediaType": "movie" or "tv", "reason": "..."}]}`;
-};
 
-const findOnTmdb = async (
+export const findOnTmdb = async (
   tmdb: TheMovieDb,
   suggestion: AiRecommendation
 ): Promise<ResolvedRecommendation | undefined> => {
@@ -354,7 +420,7 @@ const findOnTmdb = async (
 };
 
 // Runs the lookups a few at a time so we don't hammer TMDB
-const mapWithConcurrency = async <T, R>(
+export const mapWithConcurrency = async <T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>
@@ -375,7 +441,7 @@ const mapWithConcurrency = async <T, R>(
 };
 
 // Kids profiles only get titles TMDB tags as family (or kids, for series)
-const isKidFriendly = (item: ResolvedRecommendation) => {
+export const isKidFriendly = (item: ResolvedRecommendation) => {
   if ('adult' in item.result && item.result.adult) {
     return false;
   }
@@ -393,16 +459,8 @@ const generate = async (
   const tmdb = new TheMovieDb();
   const kidsMode = !!user.settings?.aiKidsMode;
   const profile = await buildTasteProfile(user, tmdb);
-  const known = [
-    ...profile.liked,
-    ...profile.disliked,
-    ...profile.watched,
-    ...profile.seenElsewhere,
-    ...profile.requested,
-    ...profile.watchlist,
-  ];
 
-  if (!known.length) {
+  if (!allItems(profile).length) {
     logger.debug('No history yet, skipping AI recommendations', {
       label: 'AI Recommendations',
       userId: user.id,
@@ -417,14 +475,7 @@ const generate = async (
     buildPrompt(profile, language, kidsMode ? ASK_FOR_KIDS : ASK_FOR)
   );
 
-  const knownIds = new Set(
-    known
-      .filter((item) => item.tmdbId)
-      .map((item) => `${item.type}-${item.tmdbId}`)
-  );
-  const knownTitles = new Set(
-    known.map((item) => `${item.type}-${normalizeTitle(item.title)}`)
-  );
+  const { ids: knownIds, titles: knownTitles } = profileKeys(profile);
 
   const resolved = await mapWithConcurrency(
     suggestions.filter(
@@ -535,3 +586,6 @@ export const getAiRecommendations = async (
 export const clearAiRecommendations = (userId: number) => {
   generations.set(userId, (generations.get(userId) ?? 0) + 1);
 };
+
+/** Changes whenever the user's cached AI data should be thrown away. */
+export const getAiGeneration = (userId: number) => generations.get(userId) ?? 0;

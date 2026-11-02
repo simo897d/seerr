@@ -139,9 +139,21 @@ export interface JellyfinWatchedItem {
   favorite: boolean;
 }
 
+export interface JellyfinLibraryTitle {
+  name: string;
+  type: 'movie' | 'tv';
+  year?: number;
+  tmdbId?: number;
+  genres: string[];
+  runtimeMinutes?: number;
+  rating?: number;
+}
+
 interface JellyfinUserItem extends JellyfinLibraryItemExtended {
   ProductionYear?: number;
   Genres?: string[];
+  CommunityRating?: number;
+  RunTimeTicks?: number;
   UserData?: {
     IsFavorite?: boolean;
     Played?: boolean;
@@ -535,38 +547,15 @@ class JellyfinAPI extends ExternalAPI {
       return [];
     }
 
-    // Jellyfin 10.9+ takes userId as a query param; Emby still uses /Users/{id}/Items
     const getItems = (params: Record<string, string | number>) =>
-      this.mediaServerType === MediaServerType.JELLYFIN
-        ? this.get<{ Items: JellyfinUserItem[] }>('/Items', {
-            params: { ...params, userId },
-          })
-        : this.get<{ Items: JellyfinUserItem[] }>(`/Users/${userId}/Items`, {
-            params,
-          });
-
-    // Runs the query once per library when limited to some libraries, then
-    // merges the results back into newest-first order.
-    const query = async (
-      params: Record<string, string | number>
-    ): Promise<JellyfinUserItem[]> => {
-      if (!libraryIds) {
-        return (await getItems(params)).Items;
-      }
-
-      const perLibrary = await Promise.all(
-        libraryIds.map((ParentId) =>
-          getItems({ ...params, ParentId, EnableUserData: 'true' })
-        )
+      this.getUserItems(userId, params);
+    const query = (params: Record<string, string | number>) =>
+      this.queryUserItems(
+        userId,
+        params,
+        libraryIds,
+        (item) => item.UserData?.LastPlayedDate ?? ''
       );
-      const lastPlayed = (item: JellyfinUserItem) =>
-        item.UserData?.LastPlayedDate ?? '';
-
-      return perLibrary
-        .flatMap((response) => response.Items)
-        .sort((a, b) => lastPlayed(b).localeCompare(lastPlayed(a)))
-        .slice(0, Number(params.Limit));
-    };
 
     const fields = 'ProviderIds,Genres,ProductionYear';
 
@@ -656,6 +645,126 @@ class JellyfinAPI extends ExternalAPI {
 
       throw new ApiError(e.response.status, ApiErrorCode.InvalidAuthToken);
     }
+  }
+
+  /**
+   * Returns movies and series on the server the user hasn't finished: some
+   * recently added and some of the best rated. Used to answer "what can I
+   * watch right now" questions.
+   */
+  public async getUnwatchedItems(
+    userId: string,
+    { limit = 60, libraryIds }: { limit?: number; libraryIds?: string[] } = {}
+  ): Promise<JellyfinLibraryTitle[]> {
+    if (libraryIds && !libraryIds.length) {
+      return [];
+    }
+
+    const base = {
+      IncludeItemTypes: 'Movie,Series',
+      Filters: 'IsUnplayed',
+      Recursive: 'true',
+      Limit: limit,
+      Fields: 'ProviderIds,Genres,ProductionYear',
+    };
+
+    try {
+      const [recent, topRated] = await Promise.all([
+        this.queryUserItems(
+          userId,
+          { ...base, SortBy: 'DateCreated', SortOrder: 'Descending' },
+          libraryIds,
+          (item) => item.DateCreated ?? ''
+        ),
+        this.queryUserItems(
+          userId,
+          { ...base, SortBy: 'CommunityRating', SortOrder: 'Descending' },
+          libraryIds,
+          (item) => String(item.CommunityRating ?? 0).padStart(5, '0')
+        ),
+      ]);
+
+      const seen = new Set<string>();
+      return [...recent, ...topRated]
+        .filter((item) => {
+          if (seen.has(item.Id)) {
+            return false;
+          }
+          seen.add(item.Id);
+          return true;
+        })
+        .map((item) => {
+          const tmdbId = Number(
+            item.ProviderIds?.Tmdb ?? item.ProviderIds?.TheMovieDb
+          );
+          return {
+            name: item.Name,
+            type: item.Type === 'Movie' ? 'movie' : 'tv',
+            year: item.ProductionYear,
+            tmdbId: tmdbId > 0 ? tmdbId : undefined,
+            genres: item.Genres ?? [],
+            runtimeMinutes: item.RunTimeTicks
+              ? Math.round(item.RunTimeTicks / 600_000_000)
+              : undefined,
+            rating: item.CommunityRating,
+          };
+        });
+    } catch (e) {
+      logger.error(
+        `Something went wrong while getting unwatched items from the Jellyfin server: ${e.message}`,
+        { label: 'Jellyfin API', error: e.response?.status }
+      );
+
+      if (!e.response) {
+        throw new ApiError(502, ApiErrorCode.ConnectionError);
+      }
+
+      throw new ApiError(e.response.status, ApiErrorCode.InvalidAuthToken);
+    }
+  }
+
+  // Lists items as seen by one user (so played/favorite filters apply to
+  // them). Jellyfin 10.9+ takes userId as a query param; Emby still uses
+  // /Users/{id}/Items.
+  private getUserItems(
+    userId: string,
+    params: Record<string, string | number>
+  ) {
+    return this.mediaServerType === MediaServerType.JELLYFIN
+      ? this.get<{ Items: JellyfinUserItem[] }>('/Items', {
+          params: { ...params, userId },
+        })
+      : this.get<{ Items: JellyfinUserItem[] }>(`/Users/${userId}/Items`, {
+          params,
+        });
+  }
+
+  // Runs the query once per library when limited to some libraries, then
+  // merges the results, highest `sortKey` first.
+  private async queryUserItems(
+    userId: string,
+    params: Record<string, string | number>,
+    libraryIds: string[] | undefined,
+    sortKey: (item: JellyfinUserItem) => string
+  ): Promise<JellyfinUserItem[]> {
+    if (!libraryIds) {
+      return (await this.getUserItems(userId, params)).Items;
+    }
+
+    const perLibrary = await Promise.all(
+      libraryIds.map((ParentId) =>
+        this.getUserItems(userId, {
+          ...params,
+          ParentId,
+          EnableUserData: 'true',
+        })
+      )
+    );
+
+    return perLibrary
+      .flatMap((response) => response.Items)
+      .sort((a, b) => sortKey(b).localeCompare(sortKey(a)))
+      .slice(0, Number(params.Limit));
   }
 
   public async getItemData(

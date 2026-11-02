@@ -636,6 +636,14 @@ components:
         cacheHours:
           type: number
           example: 24
+        chatEnabled:
+          type: boolean
+          description: Lets users ask the AI questions like "what should I watch tonight?"
+          example: true
+        chatModel:
+          type: string
+          description: Model for chat. Empty uses claude-haiku-5-5 for Claude, or the recommendation model for other providers.
+          example: ''
       required:
         - enabled
         - provider
@@ -5193,6 +5201,57 @@ paths:
           description: Successfully removed collection from blocklist
         '500':
           description: Error removing collection from blocklist
+  /ai/chat:
+    post:
+      summary: Ask the AI about what to watch
+      description: Sends a short conversation to the configured AI provider, which answers using the current user's taste and the unwatched titles on their media server. Titles the AI mentions are returned as search results. Limited to 40 messages per user per hour.
+      tags:
+        - search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - messages
+              properties:
+                messages:
+                  type: array
+                  minItems: 1
+                  maxItems: 40
+                  items:
+                    type: object
+                    required:
+                      - role
+                      - content
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant]
+                      content:
+                        type: string
+                        minLength: 1
+                        maxLength: 4000
+      responses:
+        '200':
+          description: The AI's reply
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                    example: How about a cosy comedy tonight?
+                  results:
+                    type: array
+                    items:
+                      anyOf:
+                        - $ref: '#/components/schemas/MovieResult'
+                        - $ref: '#/components/schemas/TvResult'
+        '429':
+          description: Too many messages this hour
   /feedback:
     get:
       summary: Get the current user's title feedback

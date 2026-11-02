@@ -1,9 +1,11 @@
 import Badge from '@app/components/Common/Badge';
 import { menuMessages } from '@app/components/Layout/Sidebar';
 import useClickOutside from '@app/hooks/useClickOutside';
+import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import { Transition } from '@headlessui/react';
 import {
+  ChatBubbleLeftRightIcon,
   ClockIcon,
   CogIcon,
   EllipsisHorizontalIcon,
@@ -15,6 +17,7 @@ import {
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import {
+  ChatBubbleLeftRightIcon as FilledChatBubbleLeftRightIcon,
   ClockIcon as FilledClockIcon,
   CogIcon as FilledCogIcon,
   ExclamationTriangleIcon as FilledExclamationTriangleIcon,
@@ -47,6 +50,7 @@ interface MenuLink {
   requiredPermission?: Permission | Permission[];
   permissionType?: 'and' | 'or';
   dataTestId?: string;
+  aiChat?: boolean;
 }
 
 const MobileMenu = ({
@@ -59,6 +63,7 @@ const MobileMenu = ({
   const intl = useIntl();
   const [isOpen, setIsOpen] = useState(false);
   const { hasPermission } = useUser();
+  const settings = useSettings();
   const router = useRouter();
   useClickOutside(ref, () => {
     setTimeout(() => {
@@ -98,6 +103,14 @@ const MobileMenu = ({
       svgIcon: <ClockIcon className="h-6 w-6" />,
       svgIconSelected: <FilledClockIcon className="h-6 w-6" />,
       activeRegExp: /^\/requests/,
+    },
+    {
+      href: '/ask',
+      content: intl.formatMessage(menuMessages.askai),
+      svgIcon: <ChatBubbleLeftRightIcon className="h-6 w-6" />,
+      svgIconSelected: <FilledChatBubbleLeftRightIcon className="h-6 w-6" />,
+      activeRegExp: /^\/ask/,
+      aiChat: true,
     },
     {
       href: '/blocklist',
@@ -146,10 +159,11 @@ const MobileMenu = ({
 
   const filteredLinks = menuLinks.filter(
     (link) =>
-      !link.requiredPermission ||
-      hasPermission(link.requiredPermission, {
-        type: link.permissionType ?? 'and',
-      })
+      (!link.aiChat || settings.currentSettings.aiChatEnabled) &&
+      (!link.requiredPermission ||
+        hasPermission(link.requiredPermission, {
+          type: link.permissionType ?? 'and',
+        }))
   );
 
   useEffect(() => {

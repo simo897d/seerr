@@ -19,6 +19,19 @@ export type AiRecommendation = z.infer<
   typeof RecommendationListSchema
 >['recommendations'][number];
 
+export const ChatReplySchema = z.object({
+  reply: z.string(),
+  titles: z.array(
+    z.object({
+      title: z.string(),
+      year: z.number().int().nullable(),
+      mediaType: z.enum(['movie', 'tv']),
+    })
+  ),
+});
+
+export type ChatReply = z.infer<typeof ChatReplySchema>;
+
 // Other providers don't enforce a schema, so accept common variations
 // (year as a string, missing reason) and normalize them.
 const LooseRecommendationListSchema = z.object({
@@ -104,10 +117,16 @@ const askAnthropic = async (
   return response.parsed_output.recommendations;
 };
 
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 const askOpenAiCompatible = async (
   settings: AiSettings,
   system: string,
-  prompt: string
+  turns: ChatTurn[],
+  model = settings.model
 ): Promise<string> => {
   const baseUrl = (settings.baseUrl || 'https://api.openai.com/v1').replace(
     /\/+$/,
@@ -117,11 +136,8 @@ const askOpenAiCompatible = async (
   const response = await axios.post(
     `${baseUrl}/chat/completions`,
     {
-      model: settings.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: prompt },
-      ],
+      model,
+      messages: [{ role: 'system', content: system }, ...turns],
       response_format: { type: 'json_object' },
     },
     {
@@ -138,15 +154,19 @@ const askOpenAiCompatible = async (
 const askGemini = async (
   settings: AiSettings,
   system: string,
-  prompt: string
+  turns: ChatTurn[],
+  model = settings.model
 ): Promise<string> => {
   const response = await axios.post(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      settings.model
+      model
     )}:generateContent`,
     {
       systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      contents: turns.map((turn) => ({
+        role: turn.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: turn.content }],
+      })),
       generationConfig: { responseMimeType: 'application/json' },
     },
     {
@@ -161,19 +181,22 @@ const askGemini = async (
   return parts.map((part) => part.text ?? '').join('');
 };
 
-const parseJsonRecommendations = (text: string): AiRecommendation[] => {
+const parseJson = (text: string): unknown => {
   // Some local models wrap JSON in a markdown code fence
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '');
 
-  let json: unknown;
   try {
-    json = JSON.parse(cleaned);
+    return JSON.parse(cleaned);
   } catch {
     throw new Error('The AI response was not valid JSON');
   }
+};
+
+const parseJsonRecommendations = (text: string): AiRecommendation[] => {
+  const json = parseJson(text);
 
   // Accept a bare array as well as { recommendations: [...] }
   const parsed = LooseRecommendationListSchema.safeParse(
@@ -185,6 +208,104 @@ const parseJsonRecommendations = (text: string): AiRecommendation[] => {
   }
 
   return parsed.data.recommendations;
+};
+
+// The cheapest current Claude model; chat replies are short and frequent
+export const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-5-5';
+
+const chatAnthropic = async (
+  settings: AiSettings,
+  system: string,
+  turns: ChatTurn[]
+): Promise<ChatReply> => {
+  const client = new Anthropic({
+    apiKey: settings.apiKey,
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+  const model = settings.chatModel || DEFAULT_CLAUDE_CHAT_MODEL;
+  const useFallback = FALLBACK_MODELS.has(model);
+
+  const response = await client.beta.messages.parse({
+    model,
+    max_tokens: 4000,
+    system,
+    messages: turns,
+    // The system prompt (taste profile, library) and earlier turns repeat on
+    // every message, so let the API cache them
+    cache_control: { type: 'ephemeral' },
+    output_config: {
+      ...(supportsEffort(model) ? { effort: 'low' as const } : {}),
+      format: betaZodOutputFormat(ChatReplySchema),
+    },
+    ...(useFallback
+      ? {
+          betas: ['server-side-fallback-2026-07-01'],
+          fallbacks: 'default' as const,
+        }
+      : {}),
+  });
+
+  if (response.stop_reason === 'refusal') {
+    throw new Error('Claude declined to answer that');
+  }
+
+  if (!response.parsed_output) {
+    throw new Error(
+      `Claude returned no usable reply (stop reason: ${response.stop_reason})`
+    );
+  }
+
+  return response.parsed_output;
+};
+
+const LooseChatReplySchema = z.object({
+  reply: z.string(),
+  titles: z
+    .array(
+      LooseRecommendationListSchema.shape.recommendations.element.omit({
+        reason: true,
+      })
+    )
+    .optional()
+    .default([]),
+});
+
+/**
+ * Sends a short conversation to the configured provider and returns its
+ * reply plus any titles it mentions. Uses `chatModel` when set, so chat can
+ * run on a cheaper model than the recommendations.
+ */
+export const askForChatReply = async (
+  settings: AiSettings,
+  system: string,
+  turns: ChatTurn[]
+): Promise<ChatReply> => {
+  const model = settings.chatModel || settings.model;
+
+  if (!model && settings.provider !== 'anthropic') {
+    throw new Error('No AI model is configured');
+  }
+
+  const parseLoose = (text: string) => {
+    const parsed = LooseChatReplySchema.safeParse(parseJson(text));
+    if (!parsed.success) {
+      throw new Error('The AI response did not match the expected format');
+    }
+    return parsed.data;
+  };
+
+  switch (settings.provider) {
+    case 'anthropic':
+      return chatAnthropic(settings, system, turns);
+    case 'openai':
+      return parseLoose(
+        await askOpenAiCompatible(settings, system, turns, model)
+      );
+    case 'gemini':
+      return parseLoose(await askGemini(settings, system, turns, model));
+    default:
+      throw new Error(`Unknown AI provider: ${settings.provider}`);
+  }
 };
 
 export const askForRecommendations = async (
@@ -201,11 +322,13 @@ export const askForRecommendations = async (
       return askAnthropic(settings, system, prompt);
     case 'openai':
       return parseJsonRecommendations(
-        await askOpenAiCompatible(settings, system, prompt)
+        await askOpenAiCompatible(settings, system, [
+          { role: 'user', content: prompt },
+        ])
       );
     case 'gemini':
       return parseJsonRecommendations(
-        await askGemini(settings, system, prompt)
+        await askGemini(settings, system, [{ role: 'user', content: prompt }])
       );
     default:
       throw new Error(`Unknown AI provider: ${settings.provider}`);

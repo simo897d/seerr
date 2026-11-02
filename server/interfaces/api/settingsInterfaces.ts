@@ -52,6 +52,7 @@ export interface PublicSettingsResponse {
   versionCheck: boolean;
   plexClientIdentifier: string;
   aiRecommendationsEnabled: boolean;
+  aiChatEnabled: boolean;
 }
 
 export interface CacheItem {
