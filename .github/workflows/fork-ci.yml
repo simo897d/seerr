@@ -66,3 +66,71 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  # Builds once more on Debian (the official image uses Alpine, whose native
+  # modules don't load on Debian/Ubuntu) and publishes the result, so the
+  # Proxmox updater can download it instead of building on the server.
+  package:
+    name: Package build for Proxmox
+    needs: check
+    if: github.repository != 'seerr-team/seerr' && github.ref == 'refs/heads/feature/ai-recommendations'
+    runs-on: ubuntu-26.04
+    container: node:22.23.4-bookworm@sha256:18a6d90fd60542269850c80ca03b29b1d9b14d6b221ac7ee8e35b0d33ef904bd
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pnpm Setup
+        uses: pnpm/action-setup@v6.0.10
+
+      - name: Install dependencies
+        env:
+          CI: true
+          CYPRESS_INSTALL_BINARY: 0
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        env:
+          COMMIT_TAG: ${{ github.sha }}
+        run: pnpm build
+
+      # Same trimming as the official Dockerfile
+      - name: Keep only what's needed to run
+        env:
+          CI: true
+        run: |
+          rm -rf node_modules
+          pnpm install --prod --frozen-lockfile --prefer-offline
+          cd node_modules/.pnpm
+          rm -rf @next+swc-* @swc+core* ts-node@* typescript@*
+          cd ../..
+          find node_modules -type d \( \
+            -path '*/ace-builds/src-noconflict' -o -path '*/ace-builds/src' -o \
+            -path '*/ace-builds/src-min' -o -path '*/country-flag-icons/react' -o \
+            -path '*/country-flag-icons/string' -o -path '*/country-flag-icons/1x1' -o \
+            -path '*/@heroicons/react/16' \) -prune -exec rm -rf {} +
+          find node_modules .next -name '*.map' -type f -delete
+          rm -rf .next/cache
+
+      - name: Package
+        run: |
+          node -e '
+            const fs = require("fs");
+            fs.writeFileSync("build-info.json", JSON.stringify({
+              commit: process.env.GITHUB_SHA,
+              node: process.versions.node,
+              arch: process.arch,
+              builtAt: new Date().toISOString(),
+            }, null, 2));
+          '
+          tar -czf seerr-build.tar.gz build-info.json dist .next node_modules
+          ls -lh seerr-build.tar.gz
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/publish-build.mjs seerr-build.tar.gz

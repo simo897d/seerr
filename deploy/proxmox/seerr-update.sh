@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Updates a from-source Seerr/Jellyseerr install (for example a Proxmox LXC)
-# to the newest commit of its branch that passed Fork CI on GitHub.
+# to the newest version of its branch that passed Fork CI on GitHub.
 #
-# Before updating it backs up the database and settings. If the build fails
-# or the new version doesn't start, it puts the old version and the backup
-# back.
+# By default it downloads the build that CI made, unpacks and checks it while
+# Seerr keeps running, and then only stops Seerr to swap it in. If there's no
+# usable download it builds on the server instead (slow, and Seerr is down
+# meanwhile). It backs up the database and settings first, and if the new
+# version doesn't start it puts the old version and the backup back.
 #
 # Usage: seerr-update [--check] [--force]
 #   --check  only say whether an update is available
-#   --force  rebuild even when up to date, and skip the CI check
+#   --force  reinstall even when up to date
 #
 # Settings are read from /etc/default/seerr-update (see seerr-update.conf).
 set -Eeuo pipefail
@@ -17,6 +19,8 @@ APP_DIR="${APP_DIR:-}"
 SERVICE="${SERVICE:-}"
 REMOTE="${REMOTE:-}"
 BRANCH="${BRANCH:-}"
+# github: download CI's build. local: always build on this machine.
+BUILD_SOURCE="${BUILD_SOURCE:-github}"
 REQUIRE_CI="${REQUIRE_CI:-true}"
 CI_WORKFLOW="${CI_WORKFLOW:-fork-ci.yml}"
 PORT="${PORT:-}"
@@ -24,7 +28,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/seerr}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 LOG_FILE="${LOG_FILE:-/var/log/seerr-update.log}"
 LOCK_FILE="${LOCK_FILE:-/run/seerr-update.lock}"
-HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 
 CHECK_ONLY=false
 FORCE=false
@@ -33,7 +37,7 @@ for arg in "$@"; do
     --check) CHECK_ONLY=true ;;
     --force) FORCE=true ;;
     -h | --help)
-      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -112,18 +116,28 @@ fi
 REMOTE="${REMOTE:-fork}"
 BRANCH="${BRANCH:-feature/ai-recommendations}"
 git remote get-url "$REMOTE" >/dev/null 2>&1 || die "There is no git remote called $REMOTE in $APP_DIR"
+REPO="$(git remote get-url "$REMOTE" | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
+
+STAGING="$APP_DIR/.update-staging"
+BUILD_DIRS=(dist .next node_modules)
+
+# Keep our working folders out of `git status`
+exclude="$(git rev-parse --git-path info/exclude)"
+mkdir -p "$(dirname "$exclude")"
+for pattern in '/.update-staging/' '/*.previous/'; do
+  grep -qxF "$pattern" "$exclude" 2>/dev/null || echo "$pattern" >>"$exclude"
+done
+
+# Some installs (e.g. Swizzin) move or replace the config folder, which
+# removes git's empty placeholder files there. That's harmless, so stop
+# tracking them here instead of restoring them.
+git ls-files -d -- ':(glob)config/**/.gitkeep' | xargs -r git update-index --skip-worktree --
 
 # --- Check the toolchain -----------------------------------------------------
 
 command -v node >/dev/null 2>&1 || die "Node.js is not installed"
 node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 19) ? 0 : 1)' ||
   die "Node.js $(node -v) is too old; Seerr needs 22.19 or newer"
-
-if command -v pnpm >/dev/null 2>&1; then
-  PNPM=(pnpm)
-else
-  PNPM=(npx --yes "$(node -p 'require("./package.json").packageManager')")
-fi
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   die "$APP_DIR has local changes. Commit or stash them (git stash) first."
@@ -138,58 +152,125 @@ LATEST="$(git rev-parse FETCH_HEAD)"
 git merge-base --is-ancestor "$CURRENT" "$LATEST" ||
   die "The installed version has commits that aren't on $REMOTE/$BRANCH. Fix this by hand."
 
-TARGET="$LATEST"
-if [ "$REQUIRE_CI" = true ] && [ "$FORCE" = false ] && [ "$CURRENT" != "$LATEST" ]; then
-  repo="$(git remote get-url "$REMOTE" | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
-  # Newest commits that passed CI on this branch, newest first
-  passed="$(curl -fsS -H 'Accept: application/vnd.github+json' \
-    "https://api.github.com/repos/$repo/actions/workflows/$CI_WORKFLOW/runs?branch=$BRANCH&status=success&per_page=30" |
+github_json() {
+  curl -fsS -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/$1"
+}
+
+# Candidate commits, newest first
+if [ "$BUILD_SOURCE" = github ]; then
+  # Commits with a ready-made build (CI only publishes one after all checks pass)
+  CANDIDATES="$(github_json 'releases?per_page=30' |
+    node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      const builds = JSON.parse(s).filter((r) => r.tag_name.startsWith("build-"));
+      builds.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      for (const r of builds) console.log(r.tag_name.slice(6));
+    })')" || die "Could not ask GitHub for ready-made builds"
+elif [ "$REQUIRE_CI" = true ]; then
+  CANDIDATES="$(github_json "actions/workflows/$CI_WORKFLOW/runs?branch=$BRANCH&status=success&per_page=30" |
     node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
       for (const run of JSON.parse(s).workflow_runs ?? []) console.log(run.head_sha);
     })')" || die "Could not ask GitHub which versions passed CI"
+else
+  CANDIDATES="$LATEST"
+fi
 
-  TARGET=""
-  for sha in $passed; do
+# Picks the first listed commit between the installed one and the latest
+newest_of() {
+  local sha
+  for sha in "$@"; do
     if git cat-file -e "$sha^{commit}" 2>/dev/null &&
       git merge-base --is-ancestor "$sha" "$LATEST" &&
       git merge-base --is-ancestor "$CURRENT" "$sha"; then
-      TARGET="$sha"
-      break
+      echo "$sha"
+      return
     fi
   done
-  TARGET="${TARGET:-$CURRENT}"
-fi
+}
+
+# shellcheck disable=SC2086
+TARGET="$(newest_of $CANDIDATES)"
 
 short() { git rev-parse --short "$1"; }
 
-if [ "$TARGET" = "$CURRENT" ] && [ "$FORCE" = false ]; then
+if [ -z "$TARGET" ] || { [ "$TARGET" = "$CURRENT" ] && [ "$FORCE" = false ]; }; then
   if [ "$CURRENT" = "$LATEST" ]; then
     log "Up to date ($(short "$CURRENT"))"
+  elif [ "$BUILD_SOURCE" = github ]; then
+    log "Newer version $(short "$LATEST") isn't ready to download yet (CI still running or failed); staying on $(short "$CURRENT")"
   else
     log "Newer version $(short "$LATEST") hasn't passed CI yet; staying on $(short "$CURRENT")"
   fi
+  [ -n "$TARGET" ] || [ "$FORCE" = false ] || die "There's no ready version to reinstall"
   exit 0
 fi
 
+METHOD=local
+[ "$BUILD_SOURCE" = github ] && METHOD=download
+
 if [ "$CHECK_ONLY" = true ]; then
-  log "Update available: $(short "$CURRENT") -> $(short "$TARGET"):"
+  log "Update available: $(short "$CURRENT") -> $(short "$TARGET") ($METHOD):"
   git log --oneline --no-merges "$CURRENT..$TARGET" | head -n 20 >&2 || true
   exit 0
 fi
 
-# --- Update -----------------------------------------------------------------
+# --- Get the new version ready (Seerr keeps running) -------------------------
 
 export CYPRESS_INSTALL_BINARY=0
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
 
-build() {
-  "${PNPM[@]}" install --frozen-lockfile &&
-    "${PNPM[@]}" build || return 1
-  # We build as root; hand the files back if the service runs as someone else
+fix_owner() {
+  # We run as root; hand the files back if the service runs as someone else
   if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != root ]; then
-    chown -R "$SERVICE_USER": "$APP_DIR"
+    chown -R "$SERVICE_USER": "$@"
   fi
 }
+
+# Downloads CI's build into $STAGING and checks it can run on this machine
+prepare_download() {
+  local url="https://github.com/$REPO/releases/download/build-$TARGET/seerr-build.tar.gz"
+  rm -rf "$STAGING"
+  mkdir -p "$STAGING"
+  log "Downloading the ready-made build"
+  curl -fsSL --retry 3 -o "$STAGING/build.tar.gz" "$url" || return 1
+  tar -xzf "$STAGING/build.tar.gz" -C "$STAGING" || return 1
+  rm -f "$STAGING/build.tar.gz"
+
+  (
+    cd "$STAGING" && node -e '
+      const info = require("./build-info.json");
+      const fail = (why) => { console.error(why); process.exit(1); };
+      if (info.commit !== process.argv[1]) fail("it is for a different version");
+      if (info.node.split(".")[0] !== process.versions.node.split(".")[0])
+        fail(`it was built for Node ${info.node}, this server has ${process.versions.node}`);
+      if (info.arch !== process.arch) fail(`it was built for ${info.arch}, this server is ${process.arch}`);
+      // The parts compiled for a specific system must load here
+      for (const name of ["sqlite3", "bcrypt", "sharp"]) {
+        try { require(name); } catch (e) { fail(`${name} does not load here: ${e.message}`); }
+      }
+    ' "$TARGET"
+  ) 2>>"$LOG_FILE" || {
+    log "The download can't run on this machine (details in $LOG_FILE)"
+    return 1
+  }
+  fix_owner "$STAGING"
+}
+
+build_here() {
+  local pnpm=(pnpm)
+  command -v pnpm >/dev/null 2>&1 ||
+    pnpm=(npx --yes "$(node -p 'require("./package.json").packageManager')")
+  "${pnpm[@]}" install --frozen-lockfile &&
+    "${pnpm[@]}" build || return 1
+  fix_owner "$APP_DIR"
+}
+
+if [ "$METHOD" = download ] && ! prepare_download; then
+  log "Falling back to building on this machine"
+  rm -rf "$STAGING"
+  METHOD=local
+fi
+
+# --- Swap it in ---------------------------------------------------------------
 
 healthy() {
   local waited=0
@@ -215,13 +296,27 @@ rollback() {
     cp -a "$BACKUP_DIR/db" "$CONFIG_DIR/db"
   fi
   [ -f "$BACKUP_DIR/settings.json" ] && cp -a "$BACKUP_DIR/settings.json" "$CONFIG_DIR/settings.json"
-  build >>"$LOG_FILE" 2>&1 || die "Rollback build failed. Restore by hand from $BACKUP_DIR"
+
+  if [ -d node_modules.previous ]; then
+    local dir
+    for dir in "${BUILD_DIRS[@]}"; do
+      if [ -e "$dir.previous" ]; then
+        rm -rf "$dir"
+        mv "$dir.previous" "$dir"
+      fi
+    done
+  else
+    log "Rebuilding the old version"
+    build_here >>"$LOG_FILE" 2>&1 || die "Rollback build failed. Restore by hand from $BACKUP_DIR"
+  fi
+
   systemctl start "$SERVICE"
   healthy || die "Seerr didn't start after rolling back. Check: journalctl -u $SERVICE"
   log "Rolled back to $(short "$CURRENT"); backup kept in $BACKUP_DIR"
 }
 
-log "Updating $SERVICE in $APP_DIR: $(short "$CURRENT") -> $(short "$TARGET")"
+log "Updating $SERVICE in $APP_DIR: $(short "$CURRENT") -> $(short "$TARGET") ($METHOD)"
+for dir in "${BUILD_DIRS[@]}"; do rm -rf "$dir.previous"; done
 systemctl stop "$SERVICE"
 
 mkdir -p "$BACKUP_DIR"
@@ -230,17 +325,26 @@ mkdir -p "$BACKUP_DIR"
 echo "$CURRENT" >"$BACKUP_DIR/commit"
 log "Backed up database and settings to $BACKUP_DIR"
 
-if ! git merge --quiet --ff-only "$TARGET"; then
+if [ "$TARGET" != "$CURRENT" ] && ! git merge --quiet --ff-only "$TARGET"; then
   log "Could not move to $(short "$TARGET")"
   rollback
   exit 1
 fi
 
-log "Installing dependencies and building (this takes a few minutes)"
-if ! build >>"$LOG_FILE" 2>&1; then
-  log "Build failed (details in $LOG_FILE)"
-  rollback
-  exit 1
+if [ "$METHOD" = download ]; then
+  # Keep the old build next to the new one so a rollback is instant
+  for dir in "${BUILD_DIRS[@]}"; do
+    [ -e "$dir" ] && mv "$dir" "$dir.previous"
+    mv "$STAGING/$dir" "$dir"
+  done
+  rm -rf "$STAGING"
+else
+  log "Installing dependencies and building (this takes a while)"
+  if ! build_here >>"$LOG_FILE" 2>&1; then
+    log "Build failed (details in $LOG_FILE)"
+    rollback
+    exit 1
+  fi
 fi
 
 systemctl start "$SERVICE"
@@ -250,6 +354,7 @@ if ! healthy; then
   exit 1
 fi
 
+for dir in "${BUILD_DIRS[@]}"; do rm -rf "$dir.previous"; done
 # Keep only the newest backups
 ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))" | xargs -r rm -rf || true
 
