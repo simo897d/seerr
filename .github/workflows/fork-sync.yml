@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+# Merges the latest Seerr (seerr-team/seerr develop) into the AI branch every
+# week, then runs Fork CI on the result. If the merge has conflicts this run
+# fails (GitHub emails you) and the branch is left untouched.
+#
+# Upstream changes to .github/workflows can only be pushed with a token that
+# has the "workflow" permission. Add a fine-grained personal access token
+# (Contents + Workflows: read and write, this repo only) as the SYNC_TOKEN
+# secret; without it, merges that touch workflow files fail to push.
+name: Sync with Seerr
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge latest Seerr
+    if: github.repository != 'seerr-team/seerr'
+    runs-on: ubuntu-26.04
+    env:
+      BRANCH: feature/ai-recommendations
+      UPSTREAM_URL: https://github.com/seerr-team/seerr.git
+      UPSTREAM_BRANCH: develop
+      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: feature/ai-recommendations
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Merge
+        id: merge
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --quiet "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+
+          behind=$(git rev-list --count HEAD..FETCH_HEAD)
+          if [ "$behind" = 0 ]; then
+            echo "Already up to date with Seerr."
+            exit 0
+          fi
+
+          echo "Merging $behind new Seerr commit(s)."
+          if ! git merge --no-edit FETCH_HEAD; then
+            git merge --abort
+            echo "::error title=Merge conflict::The latest Seerr changes conflict with the AI changes. Merge seerr-team/seerr develop into $BRANCH by hand."
+            exit 1
+          fi
+
+          git push origin "HEAD:$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # Pushes made with the built-in token don't start other workflows,
+      # so start CI explicitly. A SYNC_TOKEN push starts it by itself.
+      - name: Start CI
+        if: steps.merge.outputs.pushed == 'true' && env.HAS_SYNC_TOKEN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run fork-ci.yml --ref "$BRANCH" --repo "$GITHUB_REPOSITORY"

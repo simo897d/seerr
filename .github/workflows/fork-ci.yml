@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+# Checks every change to the AI fork. The Proxmox updater
+# (deploy/proxmox/seerr-update.sh) only installs commits that passed this.
+name: Fork CI
+
+on:
+  push:
+    branches:
+      - feature/ai-recommendations
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, Test & Build
+    if: github.repository != 'seerr-team/seerr'
+    runs-on: ubuntu-26.04
+    container: node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pnpm Setup
+        uses: pnpm/action-setup@v6.0.10
+
+      - name: Get pnpm store directory
+        shell: sh
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        env:
+          CI: true
+          CYPRESS_INSTALL_BINARY: 0
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formatting
+        run: pnpm format:check
+
+      - name: Unit tests
+        env:
+          CI: true
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
