@@ -614,6 +614,17 @@ components:
         updatedAt:
           type: string
           example: '2026-10-31T12:00:00.000Z'
+    AiProviderConfig:
+      type: object
+      properties:
+        apiKey:
+          type: string
+        model:
+          type: string
+        chatModel:
+          type: string
+        baseUrl:
+          type: string
     AiSettings:
       type: object
       properties:
@@ -644,6 +655,16 @@ components:
           type: string
           description: Model for chat. Empty uses claude-haiku-5-5 for Claude, or the recommendation model for other providers.
           example: ''
+        providers:
+          type: object
+          description: The API key and models last used with each provider, so switching back restores them
+          properties:
+            anthropic:
+              $ref: '#/components/schemas/AiProviderConfig'
+            openai:
+              $ref: '#/components/schemas/AiProviderConfig'
+            gemini:
+              $ref: '#/components/schemas/AiProviderConfig'
       required:
         - enabled
         - provider
@@ -2912,6 +2933,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AiSettings'
+  /settings/ai/models:
+    post:
+      summary: List the models an AI provider offers
+      description: Asks the provider which models the given API key can use, for the model picker in Settings → AI.
+      tags:
+        - settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - provider
+              properties:
+                provider:
+                  type: string
+                  enum: [anthropic, openai, gemini]
+                apiKey:
+                  type: string
+                baseUrl:
+                  type: string
+      responses:
+        '200':
+          description: Models returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: claude-haiku-5-5
+                        name:
+                          type: string
+                          example: Claude Haiku 5.5
   /settings/ai/test:
     post:
       summary: Test AI recommendation settings

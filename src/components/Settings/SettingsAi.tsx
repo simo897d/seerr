@@ -3,14 +3,21 @@ import Button from '@app/components/Common/Button';
 import LoadingSpinner from '@app/components/Common/LoadingSpinner';
 import PageTitle from '@app/components/Common/PageTitle';
 import SensitiveInput from '@app/components/Common/SensitiveInput';
+import AiModelSelect, {
+  AiModelList,
+} from '@app/components/Settings/AiModelSelect';
 import useToasts from '@app/hooks/useToasts';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
 import { ArrowDownOnSquareIcon, BeakerIcon } from '@heroicons/react/24/outline';
-import type { AiProvider, AiSettings } from '@server/lib/settings';
+import type {
+  AiProvider,
+  AiProviderConfig,
+  AiSettings,
+} from '@server/lib/settings';
 import axios from 'axios';
 import { Field, Formik } from 'formik';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import useSWR, { mutate } from 'swr';
 import * as Yup from 'yup';
@@ -31,10 +38,10 @@ const messages = defineMessages('components.Settings.SettingsAi', {
   apiKeyTipOpenai: 'Leave empty for local servers that need no key',
   model: 'Model',
   modelTipAnthropic:
-    'Claude Opus 5.5 is the default. Claude Haiku 5.5 (claude-haiku-5-5) costs much less per request.',
+    'Claude Opus 5.5 gives the best picks. Claude Haiku 5.5 costs much less per request.',
   modelTipOpenai:
-    'The model name your server expects, e.g. llama3.1 for Ollama',
-  modelTipGemini: 'The model ID shown in Google AI Studio',
+    'Listed from your server. Pick "Other…" if your model is missing.',
+  modelTipGemini: 'Listed from your Google AI Studio key',
   baseUrl: 'Base URL',
   baseUrlTip:
     'Leave empty for OpenAI. For Ollama use http://localhost:11434/v1, for LM Studio http://localhost:1234/v1.',
@@ -46,8 +53,10 @@ const messages = defineMessages('components.Settings.SettingsAi', {
     'Adds an "Ask AI" page where users can ask things like "what should I watch tonight?". Limited to 40 messages per user per hour.',
   chatModel: 'Chat Model',
   chatModelTipAnthropic:
-    'Leave empty to use Claude Haiku 5.5, the cheapest Claude model (about a tenth of a cent per message)',
-  chatModelTipOther: 'Leave empty to use the same model as recommendations',
+    'Claude Haiku 5.5 is the cheapest Claude model, about a tenth of a cent per message',
+  chatModelTipOther: 'A smaller, cheaper model is usually plenty for chat',
+  chatModelDefaultAnthropic: 'Default: Claude Haiku 5.5 (cheapest)',
+  chatModelDefaultOther: 'Same as recommendations',
   validationApiKey: 'You must provide an API key',
   validationModel: 'You must provide a model',
   validationCacheHours: 'You must provide a number of hours between 1 and 720',
@@ -68,8 +77,18 @@ const DEFAULT_MODELS: Record<AiProvider, string> = {
   gemini: '',
 };
 
+// The provider-specific part of the form
+const providerConfig = (values: AiProviderConfig): AiProviderConfig => ({
+  apiKey: values.apiKey,
+  model: values.model,
+  chatModel: values.chatModel,
+  baseUrl: values.baseUrl,
+});
+
 const SettingsAi = () => {
   const intl = useIntl();
+  // Unsaved edits per provider, so switching back and forth keeps them
+  const drafts = useRef<Partial<Record<AiProvider, AiProviderConfig>>>({});
   const { addToast, removeToast } = useToasts();
   const [isTesting, setIsTesting] = useState(false);
   const {
@@ -137,6 +156,11 @@ const SettingsAi = () => {
             await axios.post('/api/v1/settings/ai', {
               ...values,
               cacheHours: Number(values.cacheHours),
+              providers: {
+                ...data?.providers,
+                ...drafts.current,
+                [values.provider]: providerConfig(values),
+              },
             } as AiSettings);
             addToast(intl.formatMessage(messages.toastSaveSuccess), {
               autoDismiss: true,
@@ -228,6 +252,17 @@ const SettingsAi = () => {
                 </div>
               </div>
               <div className="form-row">
+                <label htmlFor="chatEnabled" className="checkbox-label">
+                  {intl.formatMessage(messages.chatEnabled)}
+                  <span className="label-tip">
+                    {intl.formatMessage(messages.chatEnabledTip)}
+                  </span>
+                </label>
+                <div className="form-input-area">
+                  <Field type="checkbox" id="chatEnabled" name="chatEnabled" />
+                </div>
+              </div>
+              <div className="form-row">
                 <label htmlFor="provider" className="text-label">
                   {intl.formatMessage(messages.provider)}
                 </label>
@@ -239,14 +274,22 @@ const SettingsAi = () => {
                       name="provider"
                       onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
                         const provider = e.target.value as AiProvider;
-                        // Swap in the new provider's default unless the admin
-                        // typed a model of their own
-                        if (
-                          Object.values(DEFAULT_MODELS).includes(values.model)
-                        ) {
-                          setFieldValue('model', DEFAULT_MODELS[provider]);
-                        }
+                        // Remember this provider's setup, then bring back
+                        // whatever the new one was last set up with
+                        drafts.current[values.provider] =
+                          providerConfig(values);
+                        const next = drafts.current[provider] ??
+                          data?.providers?.[provider] ?? {
+                            apiKey: '',
+                            model: DEFAULT_MODELS[provider],
+                            chatModel: '',
+                            baseUrl: '',
+                          };
                         setFieldValue('provider', provider);
+                        setFieldValue('apiKey', next.apiKey);
+                        setFieldValue('model', next.model);
+                        setFieldValue('chatModel', next.chatModel);
+                        setFieldValue('baseUrl', next.baseUrl);
                       }}
                     >
                       <option value="anthropic">
@@ -311,32 +354,70 @@ const SettingsAi = () => {
                     )}
                 </div>
               </div>
-              <div className="form-row">
-                <label htmlFor="model" className="text-label">
-                  {intl.formatMessage(messages.model)}
-                  {values.provider !== 'anthropic' && (
-                    <span className="label-required">*</span>
-                  )}
-                  <span className="label-tip">
-                    {intl.formatMessage(modelTip)}
-                  </span>
-                </label>
-                <div className="form-input-area">
-                  <div className="form-input-field">
-                    <Field
-                      type="text"
-                      id="model"
-                      name="model"
-                      placeholder={DEFAULT_MODELS[values.provider]}
-                    />
-                  </div>
-                  {errors.model &&
-                    touched.model &&
-                    typeof errors.model === 'string' && (
-                      <div className="error">{errors.model}</div>
+              <AiModelList
+                provider={values.provider}
+                apiKey={values.apiKey}
+                baseUrl={values.baseUrl}
+              >
+                {(models) => (
+                  <>
+                    <div className="form-row">
+                      <label htmlFor="model" className="text-label">
+                        {intl.formatMessage(messages.model)}
+                        {values.provider !== 'anthropic' && (
+                          <span className="label-required">*</span>
+                        )}
+                        <span className="label-tip">
+                          {intl.formatMessage(modelTip)}
+                        </span>
+                      </label>
+                      <div className="form-input-area">
+                        <AiModelSelect
+                          id="model"
+                          value={values.model}
+                          list={models}
+                          onChange={(model) => setFieldValue('model', model)}
+                        />
+                        {errors.model &&
+                          touched.model &&
+                          typeof errors.model === 'string' && (
+                            <div className="error">{errors.model}</div>
+                          )}
+                      </div>
+                    </div>
+                    {values.chatEnabled && (
+                      <div className="form-row">
+                        <label htmlFor="chatModel" className="text-label">
+                          {intl.formatMessage(messages.chatModel)}
+                          <span className="label-tip">
+                            {intl.formatMessage(
+                              values.provider === 'anthropic'
+                                ? messages.chatModelTipAnthropic
+                                : messages.chatModelTipOther
+                            )}
+                          </span>
+                        </label>
+                        <div className="form-input-area">
+                          <AiModelSelect
+                            id="chatModel"
+                            value={values.chatModel}
+                            list={models}
+                            hideStatus
+                            emptyLabel={intl.formatMessage(
+                              values.provider === 'anthropic'
+                                ? messages.chatModelDefaultAnthropic
+                                : messages.chatModelDefaultOther
+                            )}
+                            onChange={(model) =>
+                              setFieldValue('chatModel', model)
+                            }
+                          />
+                        </div>
+                      </div>
                     )}
-                </div>
-              </div>
+                  </>
+                )}
+              </AiModelList>
               <div className="form-row">
                 <label htmlFor="cacheHours" className="text-label">
                   {intl.formatMessage(messages.cacheHours)}
@@ -359,45 +440,6 @@ const SettingsAi = () => {
                     )}
                 </div>
               </div>
-              <div className="form-row">
-                <label htmlFor="chatEnabled" className="checkbox-label">
-                  {intl.formatMessage(messages.chatEnabled)}
-                  <span className="label-tip">
-                    {intl.formatMessage(messages.chatEnabledTip)}
-                  </span>
-                </label>
-                <div className="form-input-area">
-                  <Field type="checkbox" id="chatEnabled" name="chatEnabled" />
-                </div>
-              </div>
-              {values.chatEnabled && (
-                <div className="form-row">
-                  <label htmlFor="chatModel" className="text-label">
-                    {intl.formatMessage(messages.chatModel)}
-                    <span className="label-tip">
-                      {intl.formatMessage(
-                        values.provider === 'anthropic'
-                          ? messages.chatModelTipAnthropic
-                          : messages.chatModelTipOther
-                      )}
-                    </span>
-                  </label>
-                  <div className="form-input-area">
-                    <div className="form-input-field">
-                      <Field
-                        type="text"
-                        id="chatModel"
-                        name="chatModel"
-                        placeholder={
-                          values.provider === 'anthropic'
-                            ? 'claude-haiku-5-5'
-                            : values.model
-                        }
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
               <div className="actions">
                 <div className="flex justify-end">
                   <span className="ml-3 inline-flex rounded-md shadow-sm">

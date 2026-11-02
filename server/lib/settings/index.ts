@@ -67,6 +67,14 @@ export interface TautulliSettings {
 
 export type AiProvider = 'anthropic' | 'openai' | 'gemini';
 
+// What each provider was last set up with, so switching back restores it
+export interface AiProviderConfig {
+  apiKey: string;
+  model: string;
+  chatModel: string;
+  baseUrl: string;
+}
+
 export interface AiSettings {
   enabled: boolean;
   provider: AiProvider;
@@ -80,6 +88,7 @@ export interface AiSettings {
   chatEnabled?: boolean;
   // Model for chat; empty uses the cheapest Claude model, or `model` for other providers
   chatModel?: string;
+  providers?: Partial<Record<AiProvider, AiProviderConfig>>;
 }
 
 export interface DVRSettings {

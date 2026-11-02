@@ -15,6 +15,7 @@ import type {
   SettingsAboutResponse,
 } from '@server/interfaces/api/settingsInterfaces';
 import { scheduledJobs } from '@server/job/schedule';
+import { listModels } from '@server/lib/ai/providers';
 import { getAiRecommendations } from '@server/lib/ai/recommendations';
 import type { AvailableCacheIds } from '@server/lib/cache';
 import cacheManager from '@server/lib/cache';
@@ -547,24 +548,79 @@ const AiSettingsSchema = z.object({
   chatModel: z.string().trim().optional().default(''),
 });
 
+const AiProviderConfigSchema = z.object({
+  apiKey: z.string(),
+  model: z.string().trim(),
+  chatModel: z.string().trim(),
+  baseUrl: z.string().trim(),
+});
+
+const AiSettingsSaveSchema = AiSettingsSchema.extend({
+  providers: z
+    .partialRecord(
+      z.enum(['anthropic', 'openai', 'gemini']),
+      AiProviderConfigSchema
+    )
+    .optional(),
+});
+
 settingsRoutes.get('/ai', (_req, res) => {
   res.status(200).json(getSettings().ai);
 });
 
 settingsRoutes.post('/ai', async (req, res, next) => {
-  const parsed = AiSettingsSchema.safeParse(req.body);
+  const parsed = AiSettingsSaveSchema.safeParse(req.body);
   if (!parsed.success) {
     return next({ status: 400, message: 'Invalid AI settings.' });
   }
 
   const settings = getSettings();
-  settings.ai = parsed.data;
+  const { providers = {}, ...active } = parsed.data;
+  settings.ai = {
+    ...active,
+    // Remember every provider's setup; the active one always wins
+    providers: {
+      ...settings.ai.providers,
+      ...providers,
+      [active.provider]: {
+        apiKey: active.apiKey,
+        model: active.model,
+        chatModel: active.chatModel,
+        baseUrl: active.baseUrl,
+      },
+    },
+  };
   await settings.save();
 
   // Settings changed, so earlier recommendations may come from another model
   cacheManager.getCache('ai').flush();
 
   return res.status(200).json(settings.ai);
+});
+
+settingsRoutes.post('/ai/models', async (req, res, next) => {
+  const parsed = z
+    .object({
+      provider: z.enum(['anthropic', 'openai', 'gemini']),
+      apiKey: z.string().default(''),
+      baseUrl: z.string().trim().default(''),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    return next({ status: 400, message: 'Invalid AI settings.' });
+  }
+
+  try {
+    return res.status(200).json({ models: await listModels(parsed.data) });
+  } catch (e) {
+    return next({
+      status: 400,
+      message:
+        e.response?.data?.error?.message ??
+        e.error?.error?.message ??
+        e.message,
+    });
+  }
 });
 
 settingsRoutes.post('/ai/test', async (req, res, next) => {

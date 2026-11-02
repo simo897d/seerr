@@ -210,6 +210,75 @@ const parseJsonRecommendations = (text: string): AiRecommendation[] => {
   return parsed.data.recommendations;
 };
 
+export interface AiModelOption {
+  id: string;
+  name: string;
+}
+
+// Shown before an API key is entered, and if listing fails
+export const KNOWN_CLAUDE_MODELS: AiModelOption[] = [
+  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
+  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' },
+];
+
+/** Asks the provider which models this API key can use. */
+export const listModels = async ({
+  provider,
+  apiKey,
+  baseUrl,
+}: Pick<AiSettings, 'provider' | 'apiKey' | 'baseUrl'>): Promise<
+  AiModelOption[]
+> => {
+  switch (provider) {
+    case 'anthropic': {
+      const client = new Anthropic({ apiKey, timeout: 15_000 });
+      const models: AiModelOption[] = [];
+      for await (const model of client.models.list({ limit: 100 })) {
+        models.push({ id: model.id, name: model.display_name });
+      }
+      return models;
+    }
+    case 'openai': {
+      const url = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+      const response = await axios.get<{ data?: { id: string }[] }>(
+        `${url}/models`,
+        {
+          timeout: 15_000,
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        }
+      );
+      return (response.data.data ?? [])
+        .map((model) => ({ id: model.id, name: model.id }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+    case 'gemini': {
+      const response = await axios.get<{
+        models?: {
+          name: string;
+          displayName?: string;
+          supportedGenerationMethods?: string[];
+        }[];
+      }>('https://generativelanguage.googleapis.com/v1beta/models', {
+        timeout: 15_000,
+        params: { pageSize: 1000 },
+        headers: { 'x-goog-api-key': apiKey },
+      });
+      // Only models that can write text replies
+      return (response.data.models ?? [])
+        .filter((model) =>
+          model.supportedGenerationMethods?.includes('generateContent')
+        )
+        .map((model) => {
+          const id = model.name.replace(/^models\//, '');
+          return { id, name: model.displayName ?? id };
+        });
+    }
+    default:
+      return [];
+  }
+};
+
 // The cheapest current Claude model; chat replies are short and frequent
 export const DEFAULT_CLAUDE_CHAT_MODEL = 'claude-haiku-5-5';
 
