@@ -15,6 +15,10 @@ import type {
   SettingsAboutResponse,
 } from '@server/interfaces/api/settingsInterfaces';
 import { scheduledJobs } from '@server/job/schedule';
+import {
+  getClaudeCodeVersion,
+  hasClaudeCodeToken,
+} from '@server/lib/ai/claudeCode';
 import { listModels } from '@server/lib/ai/providers';
 import { getAiRecommendations } from '@server/lib/ai/recommendations';
 import type { AvailableCacheIds } from '@server/lib/cache';
@@ -24,7 +28,7 @@ import { Permission } from '@server/lib/permissions';
 import { jellyfinFullScanner } from '@server/lib/scanners/jellyfin';
 import { plexFullScanner } from '@server/lib/scanners/plex';
 import type { JobId, Library, MainSettings } from '@server/lib/settings';
-import { getSettings } from '@server/lib/settings';
+import { AI_PROVIDERS, getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
 import discoverSettingRoutes from '@server/routes/settings/discover';
@@ -535,7 +539,7 @@ settingsRoutes.post('/tautulli', async (req, res, next) => {
 
 const AiSettingsSchema = z.object({
   enabled: z.boolean(),
-  provider: z.enum(['anthropic', 'openai', 'gemini']),
+  provider: z.enum(AI_PROVIDERS),
   apiKey: z.string(),
   model: z.string().trim(),
   baseUrl: z.string().trim(),
@@ -557,10 +561,7 @@ const AiProviderConfigSchema = z.object({
 
 const AiSettingsSaveSchema = AiSettingsSchema.extend({
   providers: z
-    .partialRecord(
-      z.enum(['anthropic', 'openai', 'gemini']),
-      AiProviderConfigSchema
-    )
+    .partialRecord(z.enum(AI_PROVIDERS), AiProviderConfigSchema)
     .optional(),
 });
 
@@ -601,7 +602,7 @@ settingsRoutes.post('/ai', async (req, res, next) => {
 settingsRoutes.post('/ai/models', async (req, res, next) => {
   const parsed = z
     .object({
-      provider: z.enum(['anthropic', 'openai', 'gemini']),
+      provider: z.enum(AI_PROVIDERS),
       apiKey: z.string().default(''),
       baseUrl: z.string().trim().default(''),
     })
@@ -611,7 +612,17 @@ settingsRoutes.post('/ai/models', async (req, res, next) => {
   }
 
   try {
-    return res.status(200).json({ models: await listModels(parsed.data) });
+    const models = await listModels(parsed.data);
+    if (parsed.data.provider === 'claude-code') {
+      return res.status(200).json({
+        models,
+        claudeCode: {
+          version: await getClaudeCodeVersion(),
+          tokenSet: hasClaudeCodeToken(),
+        },
+      });
+    }
+    return res.status(200).json({ models });
   } catch (e) {
     return next({
       status: 400,

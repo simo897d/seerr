@@ -10,7 +10,15 @@ const messages = defineMessages('components.Settings.AiModelSelect', {
   loadFailed: "Couldn't load the model list: {error}",
   other: 'Other…',
   customPlaceholder: 'Model ID',
+  claudeCodeFound: 'Found {version} on the server.',
+  claudeCodeNoToken:
+    "CLAUDE_CODE_OAUTH_TOKEN isn't set for Seerr's service, so Claude Code needs its own sign-in on the server. Press Test to check.",
 });
+
+interface ClaudeCodeStatus {
+  version: string;
+  tokenSet: boolean;
+}
 
 export interface AiModelOption {
   id: string;
@@ -28,6 +36,7 @@ interface ModelList {
   models: AiModelOption[];
   status: 'idle' | 'loading' | 'loaded' | 'needKey' | 'error';
   error?: string;
+  claudeCode?: ClaudeCodeStatus;
 }
 
 /**
@@ -42,10 +51,14 @@ export const useAiModels = (
   const [list, setList] = useState<ModelList>({ models: [], status: 'idle' });
 
   useEffect(() => {
-    const fallback = provider === 'anthropic' ? KNOWN_CLAUDE_MODELS : [];
+    const fallback =
+      provider === 'anthropic' || provider === 'claude-code'
+        ? KNOWN_CLAUDE_MODELS
+        : [];
 
-    // Local OpenAI-compatible servers (Ollama, LM Studio) need no key
-    if (!apiKey && provider !== 'openai') {
+    // Local OpenAI-compatible servers (Ollama, LM Studio) need no key, and
+    // Claude Code signs in on its own
+    if (!apiKey && (provider === 'anthropic' || provider === 'gemini')) {
       setList({ models: fallback, status: 'needKey' });
       return;
     }
@@ -54,16 +67,17 @@ export const useAiModels = (
     setList({ models: fallback, status: 'loading' });
     const timeout = setTimeout(async () => {
       try {
-        const response = await axios.post<{ models: AiModelOption[] }>(
-          '/api/v1/settings/ai/models',
-          { provider, apiKey, baseUrl }
-        );
+        const response = await axios.post<{
+          models: AiModelOption[];
+          claudeCode?: ClaudeCodeStatus;
+        }>('/api/v1/settings/ai/models', { provider, apiKey, baseUrl });
         if (!cancelled) {
           setList({
             models: response.data.models.length
               ? response.data.models
               : fallback,
             status: 'loaded',
+            claudeCode: response.data.claudeCode,
           });
         }
       } catch (e) {
@@ -170,6 +184,15 @@ const AiModelSelect = ({
       {!hideStatus && list.status === 'needKey' && (
         <p className="mt-1 text-sm text-gray-400">
           {intl.formatMessage(messages.needKey)}
+        </p>
+      )}
+      {!hideStatus && list.claudeCode && (
+        <p className="mt-1 text-sm text-gray-400">
+          {intl.formatMessage(messages.claudeCodeFound, {
+            version: list.claudeCode.version,
+          })}
+          {!list.claudeCode.tokenSet &&
+            ` ${intl.formatMessage(messages.claudeCodeNoToken)}`}
         </p>
       )}
       {!hideStatus && list.status === 'error' && (

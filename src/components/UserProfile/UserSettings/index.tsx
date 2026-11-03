@@ -85,7 +85,10 @@ const UserSettings = ({ children }: UserSettingsProps) => {
       text: intl.formatMessage(messages.menuAi),
       route: '/settings/ai',
       regex: /\/settings\/ai/,
-      hidden: !settings.currentSettings.aiRecommendationsEnabled,
+      hidden:
+        !settings.currentSettings.aiRecommendationsEnabled ||
+        // With the Claude subscription provider only the owner gets AI
+        (settings.currentSettings.aiOwnerOnly && user?.id !== 1),
     },
     {
       text: intl.formatMessage(messages.menuPermissions),

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { askClaudeCode } from '@server/lib/ai/claudeCode';
 import type { AiSettings } from '@server/lib/settings';
 import axios from 'axios';
 import { z } from 'zod';
@@ -56,6 +57,10 @@ const LooseRecommendationListSchema = z.object({
 });
 
 const REQUEST_TIMEOUT_MS = 180_000;
+
+// Both have a default model, so none has to be chosen
+const isClaude = (provider: AiSettings['provider']) =>
+  provider === 'anthropic' || provider === 'claude-code';
 
 // Models that accept server-side refusal fallbacks ("default" routing).
 const FALLBACK_MODELS = new Set([
@@ -231,6 +236,8 @@ export const listModels = async ({
   AiModelOption[]
 > => {
   switch (provider) {
+    case 'claude-code':
+      return KNOWN_CLAUDE_MODELS;
     case 'anthropic': {
       const client = new Anthropic({ apiKey, timeout: 15_000 });
       const models: AiModelOption[] = [];
@@ -327,6 +334,28 @@ const chatAnthropic = async (
   return response.parsed_output;
 };
 
+// Claude Code gets one prompt, so earlier turns go in as a transcript
+const asTranscript = (turns: ChatTurn[]) => {
+  const last = turns[turns.length - 1];
+  const earlier = turns.slice(0, -1);
+  if (!earlier.length) {
+    return last?.content ?? '';
+  }
+  return `The conversation so far:
+${earlier
+  .map((turn) => `${turn.role === 'user' ? 'User' : 'You'}: ${turn.content}`)
+  .join('\n\n')}
+
+Their new message, which you are replying to:
+${last?.content ?? ''}`;
+};
+
+// Only Claude's API enforces the reply shape, so the others are told it
+const CHAT_JSON_SHAPE = `
+
+Respond with JSON only, shaped like:
+{"reply": "...", "titles": [{"title": "...", "year": 2014, "mediaType": "movie" or "tv"}]}`;
+
 const LooseChatReplySchema = z.object({
   reply: z.string(),
   titles: z
@@ -351,7 +380,7 @@ export const askForChatReply = async (
 ): Promise<ChatReply> => {
   const model = settings.chatModel || settings.model;
 
-  if (!model && settings.provider !== 'anthropic') {
+  if (!model && !isClaude(settings.provider)) {
     throw new Error('No AI model is configured');
   }
 
@@ -366,12 +395,28 @@ export const askForChatReply = async (
   switch (settings.provider) {
     case 'anthropic':
       return chatAnthropic(settings, system, turns);
+    case 'claude-code':
+      return parseLoose(
+        await askClaudeCode({
+          system: system + CHAT_JSON_SHAPE,
+          prompt: asTranscript(turns),
+          model: settings.chatModel || DEFAULT_CLAUDE_CHAT_MODEL,
+          timeoutMs: REQUEST_TIMEOUT_MS,
+        })
+      );
     case 'openai':
       return parseLoose(
-        await askOpenAiCompatible(settings, system, turns, model)
+        await askOpenAiCompatible(
+          settings,
+          system + CHAT_JSON_SHAPE,
+          turns,
+          model
+        )
       );
     case 'gemini':
-      return parseLoose(await askGemini(settings, system, turns, model));
+      return parseLoose(
+        await askGemini(settings, system + CHAT_JSON_SHAPE, turns, model)
+      );
     default:
       throw new Error(`Unknown AI provider: ${settings.provider}`);
   }
@@ -382,13 +427,21 @@ export const askForRecommendations = async (
   system: string,
   prompt: string
 ): Promise<AiRecommendation[]> => {
-  if (!settings.model && settings.provider !== 'anthropic') {
+  if (!settings.model && !isClaude(settings.provider)) {
     throw new Error('No AI model is configured');
   }
 
   switch (settings.provider) {
     case 'anthropic':
       return askAnthropic(settings, system, prompt);
+    case 'claude-code':
+      return parseJsonRecommendations(
+        await askClaudeCode({
+          system,
+          prompt,
+          model: settings.model || 'claude-opus-5-5',
+        })
+      );
     case 'openai':
       return parseJsonRecommendations(
         await askOpenAiCompatible(settings, system, [

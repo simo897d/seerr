@@ -31,7 +31,14 @@ const messages = defineMessages('components.Settings.SettingsAi', {
     "Each user's watch history, requests and watchlist titles are sent to the selected AI provider. Use a local model through the OpenAI-compatible provider to keep this data on your own hardware.",
   enabled: 'Enable AI Recommendations',
   provider: 'Provider',
-  providerAnthropic: 'Claude (Anthropic)',
+  providerAnthropic: 'Claude (Anthropic API key)',
+  providerClaudeCode: 'Claude subscription (Claude Code on this server)',
+  claudeCodeInfo:
+    'Runs Claude Code on this server with your own Claude subscription, so nothing is billed per request. Because the subscription is yours alone, only the server owner gets recommendations and chat with this option. To set it up, run deploy/proxmox/claude-code-setup.sh on the server (see deploy/proxmox/README.md).',
+  modelTipClaudeCode:
+    'Counts toward your subscription usage limits. Claude Opus 5.5 gives the best picks.',
+  chatModelTipClaudeCode:
+    'Claude Haiku 5.5 uses the least of your subscription usage limits',
   providerOpenai: 'OpenAI-compatible (OpenAI, Ollama, LM Studio, OpenRouter)',
   providerGemini: 'Google Gemini',
   apiKey: 'API Key',
@@ -73,9 +80,14 @@ const messages = defineMessages('components.Settings.SettingsAi', {
 
 const DEFAULT_MODELS: Record<AiProvider, string> = {
   anthropic: 'claude-opus-5-5',
+  'claude-code': 'claude-opus-5-5',
   openai: '',
   gemini: '',
 };
+
+// Both have a default model and default to Claude Haiku for chat
+const isClaude = (provider: AiProvider) =>
+  provider === 'anthropic' || provider === 'claude-code';
 
 // The provider-specific part of the form
 const providerConfig = (values: AiProviderConfig): AiProviderConfig => ({
@@ -98,16 +110,21 @@ const SettingsAi = () => {
   } = useSWR<AiSettings>('/api/v1/settings/ai');
 
   const AiSettingsSchema = Yup.object().shape({
-    provider: Yup.string().oneOf(['anthropic', 'openai', 'gemini']),
+    provider: Yup.string().oneOf([
+      'anthropic',
+      'claude-code',
+      'openai',
+      'gemini',
+    ]),
     apiKey: Yup.string().when(['enabled', 'provider'], {
       is: (enabled: boolean, provider: AiProvider) =>
-        enabled && provider !== 'openai',
+        enabled && (provider === 'anthropic' || provider === 'gemini'),
       then: (schema) =>
         schema.required(intl.formatMessage(messages.validationApiKey)),
     }),
     model: Yup.string().when(['enabled', 'provider'], {
       is: (enabled: boolean, provider: AiProvider) =>
-        enabled && provider !== 'anthropic',
+        enabled && !isClaude(provider),
       then: (schema) =>
         schema.required(intl.formatMessage(messages.validationModel)),
     }),
@@ -237,6 +254,7 @@ const SettingsAi = () => {
 
           const modelTip = {
             anthropic: messages.modelTipAnthropic,
+            'claude-code': messages.modelTipClaudeCode,
             openai: messages.modelTipOpenai,
             gemini: messages.modelTipGemini,
           }[values.provider];
@@ -295,6 +313,9 @@ const SettingsAi = () => {
                       <option value="anthropic">
                         {intl.formatMessage(messages.providerAnthropic)}
                       </option>
+                      <option value="claude-code">
+                        {intl.formatMessage(messages.providerClaudeCode)}
+                      </option>
                       <option value="openai">
                         {intl.formatMessage(messages.providerOpenai)}
                       </option>
@@ -326,34 +347,43 @@ const SettingsAi = () => {
                   </div>
                 </div>
               )}
-              <div className="form-row">
-                <label htmlFor="apiKey" className="text-label">
-                  {intl.formatMessage(messages.apiKey)}
-                  {values.provider !== 'openai' && (
-                    <span className="label-required">*</span>
-                  )}
-                  {values.provider === 'openai' && (
-                    <span className="label-tip">
-                      {intl.formatMessage(messages.apiKeyTipOpenai)}
-                    </span>
-                  )}
-                </label>
-                <div className="form-input-area">
-                  <div className="form-input-field">
-                    <SensitiveInput
-                      as="field"
-                      id="apiKey"
-                      name="apiKey"
-                      autoComplete="off"
-                    />
-                  </div>
-                  {errors.apiKey &&
-                    touched.apiKey &&
-                    typeof errors.apiKey === 'string' && (
-                      <div className="error">{errors.apiKey}</div>
-                    )}
+              {values.provider === 'claude-code' ? (
+                <div className="mt-6">
+                  <Alert
+                    title={intl.formatMessage(messages.claudeCodeInfo)}
+                    type="info"
+                  />
                 </div>
-              </div>
+              ) : (
+                <div className="form-row">
+                  <label htmlFor="apiKey" className="text-label">
+                    {intl.formatMessage(messages.apiKey)}
+                    {values.provider !== 'openai' && (
+                      <span className="label-required">*</span>
+                    )}
+                    {values.provider === 'openai' && (
+                      <span className="label-tip">
+                        {intl.formatMessage(messages.apiKeyTipOpenai)}
+                      </span>
+                    )}
+                  </label>
+                  <div className="form-input-area">
+                    <div className="form-input-field">
+                      <SensitiveInput
+                        as="field"
+                        id="apiKey"
+                        name="apiKey"
+                        autoComplete="off"
+                      />
+                    </div>
+                    {errors.apiKey &&
+                      touched.apiKey &&
+                      typeof errors.apiKey === 'string' && (
+                        <div className="error">{errors.apiKey}</div>
+                      )}
+                  </div>
+                </div>
+              )}
               <AiModelList
                 provider={values.provider}
                 apiKey={values.apiKey}
@@ -364,7 +394,7 @@ const SettingsAi = () => {
                     <div className="form-row">
                       <label htmlFor="model" className="text-label">
                         {intl.formatMessage(messages.model)}
-                        {values.provider !== 'anthropic' && (
+                        {!isClaude(values.provider) && (
                           <span className="label-required">*</span>
                         )}
                         <span className="label-tip">
@@ -393,7 +423,9 @@ const SettingsAi = () => {
                             {intl.formatMessage(
                               values.provider === 'anthropic'
                                 ? messages.chatModelTipAnthropic
-                                : messages.chatModelTipOther
+                                : values.provider === 'claude-code'
+                                  ? messages.chatModelTipClaudeCode
+                                  : messages.chatModelTipOther
                             )}
                           </span>
                         </label>
@@ -404,7 +436,7 @@ const SettingsAi = () => {
                             list={models}
                             hideStatus
                             emptyLabel={intl.formatMessage(
-                              values.provider === 'anthropic'
+                              isClaude(values.provider)
                                 ? messages.chatModelDefaultAnthropic
                                 : messages.chatModelDefaultOther
                             )}

@@ -1,7 +1,7 @@
 import Badge from '@app/components/Common/Badge';
 import { menuMessages } from '@app/components/Layout/Sidebar';
+import useAiEnabled from '@app/hooks/useAiEnabled';
 import useClickOutside from '@app/hooks/useClickOutside';
-import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import { Transition } from '@headlessui/react';
 import {
@@ -63,7 +63,7 @@ const MobileMenu = ({
   const intl = useIntl();
   const [isOpen, setIsOpen] = useState(false);
   const { hasPermission } = useUser();
-  const settings = useSettings();
+  const aiEnabled = useAiEnabled();
   const router = useRouter();
   useClickOutside(ref, () => {
     setTimeout(() => {
@@ -159,7 +159,7 @@ const MobileMenu = ({
 
   const filteredLinks = menuLinks.filter(
     (link) =>
-      (!link.aiChat || settings.currentSettings.aiChatEnabled) &&
+      (!link.aiChat || aiEnabled.chat) &&
       (!link.requiredPermission ||
         hasPermission(link.requiredPermission, {
           type: link.permissionType ?? 'and',

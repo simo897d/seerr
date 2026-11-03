@@ -1,7 +1,7 @@
 import Badge from '@app/components/Common/Badge';
 import VersionStatus from '@app/components/Layout/VersionStatus';
+import useAiEnabled from '@app/hooks/useAiEnabled';
 import useClickOutside from '@app/hooks/useClickOutside';
-import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import defineMessages from '@app/utils/defineMessages';
 import { Transition, TransitionChild } from '@headlessui/react';
@@ -142,9 +142,9 @@ const Sidebar = ({
   const router = useRouter();
   const intl = useIntl();
   const { hasPermission } = useUser();
-  const settings = useSettings();
+  const aiEnabled = useAiEnabled();
   const visibleLinks = SidebarLinks.filter(
-    (link) => !link.aiChat || settings.currentSettings.aiChatEnabled
+    (link) => !link.aiChat || aiEnabled.chat
   );
   useClickOutside(navRef, () => setClosed());
 

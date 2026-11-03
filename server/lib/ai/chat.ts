@@ -6,7 +6,9 @@ import { askForChatReply } from '@server/lib/ai/providers';
 import type { ResolvedRecommendation } from '@server/lib/ai/recommendations';
 import {
   KIDS_PROMPT,
+  OWNER_ONLY_MESSAGE,
   buildTasteProfile,
+  canUseAi,
   findOnTmdb,
   formatTasteProfile,
   getAiGeneration,
@@ -28,6 +30,7 @@ const MESSAGES_PER_HOUR = 40;
 const CONTEXT_TTL_SECONDS = 600;
 
 export class ChatLimitError extends Error {}
+export class ChatNotAllowedError extends Error {}
 
 const recentMessages = new Map<number, number[]>();
 
@@ -127,6 +130,9 @@ export const chatWithAi = async (
   user: User,
   turns: ChatTurn[]
 ): Promise<ChatAnswer> => {
+  if (!canUseAi(user)) {
+    throw new ChatNotAllowedError(OWNER_ONLY_MESSAGE);
+  }
   checkRateLimit(user.id);
 
   const settings = getSettings().ai;

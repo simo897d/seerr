@@ -633,8 +633,9 @@ components:
           example: true
         provider:
           type: string
-          enum: [anthropic, openai, gemini]
+          enum: [anthropic, claude-code, openai, gemini]
           example: anthropic
+          description: claude-code runs the Claude Code program on the server with the owner's Claude subscription; only the owner gets AI then
         apiKey:
           type: string
         model:
@@ -660,6 +661,8 @@ components:
           description: The API key and models last used with each provider, so switching back restores them
           properties:
             anthropic:
+              $ref: '#/components/schemas/AiProviderConfig'
+            claude-code:
               $ref: '#/components/schemas/AiProviderConfig'
             openai:
               $ref: '#/components/schemas/AiProviderConfig'
@@ -2950,7 +2953,7 @@ paths:
               properties:
                 provider:
                   type: string
-                  enum: [anthropic, openai, gemini]
+                  enum: [anthropic, claude-code, openai, gemini]
                 apiKey:
                   type: string
                 baseUrl:
@@ -2974,6 +2977,16 @@ paths:
                         name:
                           type: string
                           example: Claude Haiku 5.5
+                  claudeCode:
+                    type: object
+                    description: Only for the claude-code provider
+                    properties:
+                      version:
+                        type: string
+                        example: 2.1.317 (Claude Code)
+                      tokenSet:
+                        type: boolean
+                        description: Whether CLAUDE_CODE_OAUTH_TOKEN is set for Seerr's service
   /settings/ai/test:
     post:
       summary: Test AI recommendation settings

@@ -1,6 +1,10 @@
 import { MediaType } from '@server/constants/media';
 import Media from '@server/entity/Media';
-import { ChatLimitError, chatWithAi } from '@server/lib/ai/chat';
+import {
+  ChatLimitError,
+  ChatNotAllowedError,
+  chatWithAi,
+} from '@server/lib/ai/chat';
 import type { ChatTurn } from '@server/lib/ai/providers';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -50,6 +54,9 @@ aiRoutes.post<never, unknown, { messages: ChatTurn[] }>(
     } catch (e) {
       if (e instanceof ChatLimitError) {
         return next({ status: 429, message: e.message });
+      }
+      if (e instanceof ChatNotAllowedError) {
+        return next({ status: 403, message: e.message });
       }
       logger.error('Something went wrong answering an AI chat message', {
         label: 'AI Recommendations',

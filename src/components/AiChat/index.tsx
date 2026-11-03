@@ -2,7 +2,7 @@ import Button from '@app/components/Common/Button';
 import PageTitle from '@app/components/Common/PageTitle';
 import Slider from '@app/components/Slider';
 import TitleCard from '@app/components/TitleCard';
-import useSettings from '@app/hooks/useSettings';
+import useAiEnabled from '@app/hooks/useAiEnabled';
 import defineMessages from '@app/utils/defineMessages';
 import {
   ArrowPathIcon,
@@ -91,7 +91,7 @@ const TitleRow = ({
 
 const AiChat = () => {
   const intl = useIntl();
-  const settings = useSettings();
+  const aiEnabled = useAiEnabled();
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -150,7 +150,7 @@ const AiChat = () => {
     setError(null);
   };
 
-  if (!settings.currentSettings.aiChatEnabled) {
+  if (!aiEnabled.chat) {
     return (
       <>
         <PageTitle title={intl.formatMessage(messages.askAi)} />

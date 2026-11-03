@@ -266,6 +266,7 @@ CoreApp.getInitialProps = async (initialProps) => {
     plexClientIdentifier: '',
     aiRecommendationsEnabled: false,
     aiChatEnabled: false,
+    aiOwnerOnly: false,
   };
 
   if (ctx.res) {

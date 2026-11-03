@@ -42,6 +42,29 @@ happens as a fallback, also needs about 4 GB of RAM.
 Settings such as the service name, branch or backup location are detected
 automatically. To override them, edit `/etc/default/seerr-update`.
 
+## Claude subscription for AI recommendations
+
+Instead of an API key, AI recommendations and chat can run on your own Claude
+subscription (Pro or Max). Seerr then runs the Claude Code program on the
+server, which signs in with a token from `claude setup-token`. Seerr itself
+never reads or stores the token. Because the subscription is yours alone,
+only the server owner gets AI with this option.
+
+Run once, as root inside the container:
+
+```bash
+cd /opt/jellyseerr   # or wherever your checkout is
+bash deploy/proxmox/claude-code-setup.sh
+```
+
+It installs Claude Code for the user Seerr runs as, asks for the token (run
+`claude setup-token` on your own computer to get one), checks that it works,
+saves it in `/etc/seerr/claude-code.env` (readable by root only) and restarts
+Seerr. Then pick **Claude subscription** under Settings → AI Recommendations.
+
+Claude Code doesn't update itself here. Run the script again to update it or
+to replace the token (tokens last a year).
+
 ## How new versions get here
 
 - **Fork CI** type-checks, lints, tests and builds every push to

@@ -1,5 +1,5 @@
 import Button from '@app/components/Common/Button';
-import useSettings from '@app/hooks/useSettings';
+import useAiEnabled from '@app/hooks/useAiEnabled';
 import useToasts from '@app/hooks/useToasts';
 import defineMessages from '@app/utils/defineMessages';
 import {
@@ -34,8 +34,7 @@ interface TitleFeedbackProps {
 const TitleFeedback = ({ mediaType, tmdbId }: TitleFeedbackProps) => {
   const intl = useIntl();
   const { addToast } = useToasts();
-  const settings = useSettings();
-  const enabled = settings.currentSettings.aiRecommendationsEnabled;
+  const enabled = useAiEnabled().recommendations;
   const url = `/api/v1/feedback/${mediaType}/${tmdbId}`;
   const { data, mutate } = useSWR<{ status: Status | null }>(
     enabled ? url : null

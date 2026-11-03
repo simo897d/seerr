@@ -65,7 +65,16 @@ export interface TautulliSettings {
   externalUrl?: string;
 }
 
-export type AiProvider = 'anthropic' | 'openai' | 'gemini';
+export const AI_PROVIDERS = [
+  'anthropic',
+  // The Claude Code program on the server, signed in with the owner's own
+  // Claude subscription. Only the owner gets AI with it.
+  'claude-code',
+  'openai',
+  'gemini',
+] as const;
+
+export type AiProvider = (typeof AI_PROVIDERS)[number];
 
 // What each provider was last set up with, so switching back restores it
 export interface AiProviderConfig {
@@ -247,6 +256,8 @@ interface FullPublicSettings extends PublicSettings {
   plexClientIdentifier: string;
   aiRecommendationsEnabled: boolean;
   aiChatEnabled: boolean;
+  // AI runs on the owner's Claude subscription, so only the owner sees it
+  aiOwnerOnly: boolean;
 }
 
 export interface NotificationAgentConfig {
@@ -794,6 +805,7 @@ class Settings {
       plexClientIdentifier: this.data.clientId,
       aiRecommendationsEnabled: this.data.ai.enabled,
       aiChatEnabled: this.data.ai.enabled && this.data.ai.chatEnabled !== false,
+      aiOwnerOnly: this.data.ai.provider === 'claude-code',
     };
   }
 

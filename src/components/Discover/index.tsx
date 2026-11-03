@@ -14,8 +14,8 @@ import StudioSlider from '@app/components/Discover/StudioSlider';
 import TvGenreSlider from '@app/components/Discover/TvGenreSlider';
 import { sliderTitles } from '@app/components/Discover/constants';
 import MediaSlider from '@app/components/MediaSlider';
+import useAiEnabled from '@app/hooks/useAiEnabled';
 import { encodeURIExtraParams } from '@app/hooks/useDiscover';
-import useSettings from '@app/hooks/useSettings';
 import useToasts from '@app/hooks/useToasts';
 import { Permission, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
@@ -57,7 +57,7 @@ const Discover = () => {
   const intl = useIntl();
   const { hasPermission } = useUser();
   const { addToast } = useToasts();
-  const settings = useSettings();
+  const aiEnabled = useAiEnabled();
   const {
     data: discoverData,
     error: discoverError,
@@ -224,8 +224,7 @@ const Discover = () => {
             sliderComponent = <PlexWatchlistSlider />;
             break;
           case DiscoverSliderType.AI_RECOMMENDATIONS:
-            sliderComponent = settings.currentSettings
-              .aiRecommendationsEnabled ? (
+            sliderComponent = aiEnabled.recommendations ? (
               <MediaSlider
                 sliderKey="ai-recommendations"
                 title={intl.formatMessage(sliderTitles.airecommendations)}

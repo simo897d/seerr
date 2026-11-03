@@ -517,6 +517,16 @@ const generate = async (
   return recommendations.slice(0, MAX_RESULTS);
 };
 
+export const OWNER_ONLY_MESSAGE =
+  "AI runs on the server owner's Claude subscription, so only the owner can use it.";
+
+/**
+ * With the Claude Code provider, AI runs on the owner's own Claude
+ * subscription, which isn't for sharing, so nobody else gets it.
+ */
+export const canUseAi = (user: User, aiSettings = getSettings().ai) =>
+  aiSettings.provider !== 'claude-code' || user.id === 1;
+
 /**
  * Returns personalized recommendations for a user, cached per user.
  * Pass `aiSettings` to try unsaved settings (no caching is done then).
@@ -529,6 +539,13 @@ export const getAiRecommendations = async (
     refresh = false,
   }: { language?: string; aiSettings?: AiSettings; refresh?: boolean } = {}
 ): Promise<ResolvedRecommendation[]> => {
+  if (!canUseAi(user, aiSettings)) {
+    if (aiSettings) {
+      throw new Error(OWNER_ONLY_MESSAGE);
+    }
+    return [];
+  }
+
   if (aiSettings) {
     return generate(user, aiSettings, language);
   }
