@@ -11,10 +11,16 @@ import type {
 import { MediaType } from '@server/constants/media';
 import { MediaServerType } from '@server/constants/server';
 import { getRepository } from '@server/datasource';
+import type { AiSuggestion } from '@server/entity/AiSuggestion';
+import { SuggestionOutcome } from '@server/entity/AiSuggestion';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import { FeedbackStatus, TitleFeedback } from '@server/entity/TitleFeedback';
 import type { User } from '@server/entity/User';
 import { Watchlist } from '@server/entity/Watchlist';
+import {
+  recordSuggestions,
+  updateSuggestionOutcomes,
+} from '@server/lib/ai/learning';
 import type { AiRecommendation } from '@server/lib/ai/providers';
 import { askForRecommendations } from '@server/lib/ai/providers';
 import cacheManager from '@server/lib/cache';
@@ -34,6 +40,9 @@ interface TasteItem {
   tmdbId?: number;
   genres?: string[];
   favorite?: boolean;
+  // For earlier AI picks: what they did with it, and why it was picked
+  outcome?: SuggestionOutcome;
+  reason?: string;
 }
 
 export interface TasteProfile {
@@ -43,6 +52,10 @@ export interface TasteProfile {
   seenElsewhere: TasteItem[];
   requested: TasteItem[];
   watchlist: TasteItem[];
+  // Earlier AI picks they watched or requested
+  pickedUp: TasteItem[];
+  // Earlier AI picks they kept passing on
+  passedOn: TasteItem[];
 }
 
 const MAX_RESULTS = 20;
@@ -243,6 +256,34 @@ export const buildTasteProfile = async (
     feedback.map((item) => itemKey(feedbackType(item), item.tmdbId))
   );
 
+  // See what came of earlier recommendations
+  const watchedIds = new Set(
+    history
+      .filter((item) => item.tmdbId)
+      .map((item) => itemKey(item.type, item.tmdbId as number))
+  );
+  const watchedTitles = new Set(
+    history.map((item) => `${item.type}-${normalizeTitle(item.name)}`)
+  );
+  const earlier = await updateSuggestionOutcomes(user, {
+    feedback,
+    isWatched: (suggestion) => {
+      const type = suggestion.mediaType === MediaType.MOVIE ? 'movie' : 'tv';
+      return (
+        watchedIds.has(itemKey(type, suggestion.tmdbId)) ||
+        watchedTitles.has(`${type}-${normalizeTitle(suggestion.title)}`)
+      );
+    },
+  });
+  const fromSuggestion = (item: AiSuggestion): TasteItem => ({
+    title: item.title,
+    type: item.mediaType === MediaType.MOVIE ? 'movie' : 'tv',
+    year: item.year ?? undefined,
+    tmdbId: item.tmdbId,
+    outcome: item.outcome,
+    reason: item.reason,
+  });
+
   return {
     liked: byStatus(FeedbackStatus.LIKED).slice(0, 40),
     disliked: byStatus(FeedbackStatus.DISLIKED).slice(0, 40),
@@ -261,6 +302,8 @@ export const buildTasteProfile = async (
       })),
     requested,
     watchlist,
+    pickedUp: earlier.pickedUp.map(fromSuggestion),
+    passedOn: earlier.passedOn.map(fromSuggestion),
   };
 };
 
@@ -275,6 +318,14 @@ const formatItem = (item: TasteItem) => {
   if (item.favorite) {
     parts.push('FAVORITE');
   }
+  if (item.outcome === SuggestionOutcome.WATCHED) {
+    parts.push('they watched it');
+  } else if (item.outcome === SuggestionOutcome.REQUESTED) {
+    parts.push('they requested it');
+  }
+  if (item.reason) {
+    parts.push(`you said: ${item.reason}`);
+  }
   return `- ${parts.join(' | ')}`;
 };
 
@@ -286,6 +337,7 @@ Guidelines:
 - Only suggest real, released titles that are listed on The Movie Database, using their original English title and first release year so they can be looked up.
 - Titles they rated thumbs up are the strongest signal of their taste. Titles they rated thumbs down show what to steer away from, so avoid close matches to those.
 - Never suggest anything that already appears anywhere in what you are given, including titles they disliked or have seen elsewhere.
+- If you are shown your earlier picks, learn from them: lean toward what the picks they went for have in common, and away from what the picks they passed on have in common.
 - Mix well-known picks with less obvious ones they probably haven't seen. Avoid only suggesting the most popular titles of all time.
 - Match the movie/TV balance of their history, but include some of each when the history has both.
 - Keep each reason to one short sentence that names what in their history it connects to.
@@ -332,6 +384,19 @@ export const formatTasteProfile = (profile: TasteProfile) => {
     );
   }
 
+  if (profile.pickedUp.length) {
+    sections.push(
+      `Your earlier picks they went for (good calls):\n${list(profile.pickedUp)}`
+    );
+  }
+  if (profile.passedOn.length) {
+    sections.push(
+      `Your earlier picks they passed on (shown for weeks, never watched or requested):\n${list(
+        profile.passedOn
+      )}`
+    );
+  }
+
   return sections.join('\n\n');
 };
 
@@ -342,6 +407,8 @@ const allItems = (profile: TasteProfile) => [
   ...profile.seenElsewhere,
   ...profile.requested,
   ...profile.watchlist,
+  ...profile.pickedUp,
+  ...profile.passedOn,
 ];
 
 /** Every title in the profile, keyed like `movie-603`, so it isn't suggested again. */
@@ -588,7 +655,9 @@ export const getAiRecommendations = async (
         ? Math.max(1, settings.cacheHours) * 3600
         : 900;
       cache.set(cacheKey, recommendations, ttl);
-      return recommendations;
+      return recordSuggestions(user, recommendations).then(
+        () => recommendations
+      );
     })
     .finally(() => inFlight.delete(cacheKey));
 

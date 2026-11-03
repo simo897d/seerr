@@ -1,3 +1,4 @@
+import { AiSuggestion } from '@server/entity/AiSuggestion';
 import { Blocklist } from '@server/entity/Blocklist';
 import DiscoverSlider from '@server/entity/DiscoverSlider';
 import Issue from '@server/entity/Issue';
@@ -26,6 +27,7 @@ import { DataSource } from 'typeorm';
 const DB_SSL_PREFIX = 'DB_SSL_';
 
 const entities = [
+  AiSuggestion,
   Blocklist,
   DiscoverSlider,
   Issue,
