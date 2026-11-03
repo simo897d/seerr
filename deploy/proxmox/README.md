@@ -65,6 +65,52 @@ Seerr. Then pick **Claude subscription** under Settings → AI Recommendations.
 Claude Code doesn't update itself here. Run the script again to update it or
 to replace the token (tokens last a year).
 
+## Updating Swizzin and its other apps
+
+`sudo box update` only updates Swizzin's own scripts, not the apps, and the
+panel has no update button. `swizzin-update` updates everything else every
+night around 03:00, before Seerr's own update:
+
+1. system packages with apt, which also updates the apps that come from their
+   own package sources (Plex, Jellyfin, Ombi, nginx and others)
+2. Swizzin itself (`box update`)
+3. every installed app that has a Swizzin upgrade script. It looks for
+   installed apps on each run, so apps you add later are included without
+   changing anything.
+
+It leaves out the few upgrade scripts that would cause trouble with nobody
+watching:
+
+- scripts that ask questions, such as rTorrent, qBittorrent and Deluge (which
+  version to build) or Airsonic
+- `nginx`, which resets your nginx configs
+- `curl`, `sonarr`, `plex` and `ombi`, which don't update anything that apt
+  doesn't already update
+
+Upgrade the skipped apps yourself with `box upgrade <app>` when you want a new
+version. Sonarr, Radarr, Prowlarr and the other *arr apps update themselves
+once **Settings → General → Updates → Automatic** is on. The summary at the end
+of each run says if one of them has it off.
+
+Run once, as root inside the container:
+
+```bash
+cd /opt/jellyseerr   # or wherever your checkout is
+bash deploy/proxmox/swizzin-update.sh --install
+```
+
+| What                           | Command                                       |
+| ------------------------------ | --------------------------------------------- |
+| Update now                     | `swizzin-update`                              |
+| Only show what would be done   | `swizzin-update --dry-run`                    |
+| Read the last runs             | `journalctl -u swizzin-update`                |
+| When the next run is           | `systemctl list-timers swizzin-update.timer`  |
+| Turn automatic updates off     | `systemctl disable --now swizzin-update.timer` |
+
+If a step takes more than 45 minutes it's stopped, because it's most likely
+waiting for an answer, and the rest still runs. Failed steps are listed at the
+end, and Swizzin's own log is in `/root/logs/swizzin.log`.
+
 ## How new versions get here
 
 - **Fork CI** type-checks, lints, tests and builds every push to
