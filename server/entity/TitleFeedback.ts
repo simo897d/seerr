@@ -15,12 +15,14 @@ export enum FeedbackStatus {
   // Seen somewhere else, no opinion given
   WATCHED = 'watched',
   LIKED = 'liked',
+  // Watched it, it was OK: neither loved nor disliked
+  MEH = 'meh',
   DISLIKED = 'disliked',
 }
 
 /**
- * What a user has told us about a title: that they've seen it, loved it or
- * didn't like it. Used to tailor AI recommendations.
+ * What a user has told us about a title: that they've seen it, loved it,
+ * found it OK or didn't like it. Used to tailor AI recommendations.
  */
 @Entity()
 @Unique('UNIQUE_TITLE_FEEDBACK', ['user', 'tmdbId', 'mediaType'])

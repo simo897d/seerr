@@ -13,7 +13,14 @@ import {
   recordSuggestions,
   updateSuggestionOutcomes,
 } from '@server/lib/ai/learning';
-import type { ResolvedRecommendation } from '@server/lib/ai/recommendations';
+import type {
+  ResolvedRecommendation,
+  TasteProfile,
+} from '@server/lib/ai/recommendations';
+import {
+  basedOnFinder,
+  formatTasteProfile,
+} from '@server/lib/ai/recommendations';
 import { setupTestDb } from '@server/test/db';
 
 setupTestDb();
@@ -144,6 +151,95 @@ describe('AI suggestion learning', () => {
       SuggestionOutcome.WATCHED
     );
     assert.equal(result.passedOn.length, 0);
+  });
+
+  it('turns a watched pick into disliked when rated down later', async () => {
+    const user = await getUser();
+    await recordSuggestions(user, [movie(1, 'Inception'), movie(2, 'Heat')]);
+    const watched = (suggestion: AiSuggestion) =>
+      suggestion.tmdbId === 1 || suggestion.tmdbId === 2;
+    await updateSuggestionOutcomes(user, { feedback: [], isWatched: watched });
+
+    const rating = (tmdbId: number, title: string, status: FeedbackStatus) =>
+      new TitleFeedback({
+        user,
+        tmdbId,
+        mediaType: MediaType.MOVIE,
+        status,
+        title,
+      });
+    const result = await updateSuggestionOutcomes(user, {
+      feedback: [
+        rating(1, 'Inception', FeedbackStatus.DISLIKED),
+        rating(2, 'Heat', FeedbackStatus.MEH),
+      ],
+      // Even if the media server history can't be read this time
+      isWatched: () => false,
+    });
+
+    const saved = await suggestionsOf(user);
+    assert.equal(saved.get('Inception')?.outcome, SuggestionOutcome.DISLIKED);
+    // Just OK still counts as watched; the rating is shown to the AI
+    assert.equal(saved.get('Heat')?.outcome, SuggestionOutcome.WATCHED);
+    assert.deepEqual(
+      result.pickedUp.map((item) => item.title),
+      ['Heat']
+    );
+  });
+});
+
+const emptyProfile = (): TasteProfile => ({
+  liked: [],
+  meh: [],
+  disliked: [],
+  watched: [],
+  seenElsewhere: [],
+  requested: [],
+  watchlist: [],
+  pickedUp: [],
+  passedOn: [],
+});
+
+describe('AI taste profile', () => {
+  it('lists titles rated "it was OK" on their own', () => {
+    const profile = emptyProfile();
+    profile.meh.push({ title: 'Tenet', type: 'movie', year: 2020 });
+    profile.pickedUp.push({
+      title: 'Heat',
+      type: 'movie',
+      outcome: SuggestionOutcome.WATCHED,
+      rating: FeedbackStatus.MEH,
+    });
+
+    const text = formatTasteProfile(profile);
+    assert.match(text, /Rated "it was OK".*\n- Tenet \(2020\) \| movie/);
+    assert.match(text, /Heat \| movie \| they watched it, it was just OK/);
+  });
+
+  it('only says "because" for titles from their history', () => {
+    const profile = emptyProfile();
+    profile.liked.push({ title: 'Alien', type: 'movie' });
+    profile.watched.push(
+      { title: 'Alien', type: 'movie' },
+      { title: 'Dark', type: 'tv' }
+    );
+    profile.watchlist.push({ title: 'Severance', type: 'tv' });
+    profile.disliked.push({ title: 'Cats', type: 'movie' });
+    profile.meh.push({ title: 'Tenet', type: 'movie' });
+    // Disliked titles never count, even when they're also on the watchlist
+    profile.watchlist.push({ title: 'Cats', type: 'movie' });
+
+    const find = basedOnFinder(profile);
+    assert.deepEqual(find('alien (1979)'), { title: 'Alien', why: 'loved' });
+    assert.deepEqual(find('Dark'), { title: 'Dark', why: 'watched' });
+    assert.deepEqual(find('Severance'), {
+      title: 'Severance',
+      why: 'watchlist',
+    });
+    assert.equal(find('Cats'), undefined);
+    assert.equal(find('Tenet'), undefined);
+    assert.equal(find('Something they never saw'), undefined);
+    assert.equal(find(null), undefined);
   });
 });
 

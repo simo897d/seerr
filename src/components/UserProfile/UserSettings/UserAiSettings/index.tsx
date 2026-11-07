@@ -35,11 +35,12 @@ const messages = defineMessages(
     toastSettingsFailure: 'Something went wrong while saving settings.',
     ratings: 'Your Ratings',
     ratingsDescription:
-      'Titles you marked as watched, loved or not for you. They are never recommended to you, and your ratings guide what is.',
+      'Titles you marked as watched, loved, OK or not for you. They are never recommended to you, and your ratings guide what is.',
     noRatings:
       'You have not rated anything yet. Use the buttons under the overview on any movie or series page.',
     watched: 'Watched',
     liked: 'Loved it',
+    meh: 'It was OK',
     disliked: 'Not for me',
     remove: 'Remove',
     refresh: 'Get New Recommendations',
@@ -53,17 +54,18 @@ const messages = defineMessages(
 interface FeedbackItem {
   tmdbId: number;
   mediaType: 'movie' | 'tv';
-  status: 'watched' | 'liked' | 'disliked';
+  status: 'watched' | 'liked' | 'meh' | 'disliked';
   title: string;
   year?: number;
 }
 
 const statusBadge: Record<
   FeedbackItem['status'],
-  'primary' | 'success' | 'danger'
+  'primary' | 'success' | 'warning' | 'danger'
 > = {
   watched: 'primary',
   liked: 'success',
+  meh: 'warning',
   disliked: 'danger',
 };
 

@@ -604,7 +604,7 @@ components:
           enum: [movie, tv]
         status:
           type: string
-          enum: [watched, liked, disliked]
+          enum: [watched, liked, meh, disliked]
         title:
           type: string
           example: The Matrix
@@ -5330,7 +5330,7 @@ paths:
   /feedback:
     get:
       summary: Get the current user's title feedback
-      description: Returns every title the current user has marked as watched, liked or disliked, newest first.
+      description: Returns every title the current user has marked as watched, liked, meh (it was OK) or disliked, newest first.
       tags:
         - watchlist
       responses:
@@ -5370,9 +5370,9 @@ paths:
                   status:
                     type: string
                     nullable: true
-                    enum: [watched, liked, disliked, null]
+                    enum: [watched, liked, meh, disliked, null]
     post:
-      summary: Mark a title as watched, liked or disliked
+      summary: Mark a title as watched, liked, meh (it was OK) or disliked
       description: Used to tailor AI recommendations. Titles with feedback are never recommended.
       tags:
         - watchlist
@@ -5399,7 +5399,7 @@ paths:
               properties:
                 status:
                   type: string
-                  enum: [watched, liked, disliked]
+                  enum: [watched, liked, meh, disliked]
       responses:
         '200':
           description: Feedback saved
@@ -6877,7 +6877,7 @@ paths:
   /discover/recommended:
     get:
       summary: Get AI recommendations for the current user
-      description: Returns movies and series picked by the configured AI provider from the user's watch history, ratings, requests and watchlist. Results are cached per user.
+      description: Returns movies and series picked by the configured AI provider from the user's watch history, ratings, requests and watchlist. Results are cached per user. Each result also has `aiPick`, with the AI's `reason` and, when one fits, `basedOn`, the title in the user's history it was picked because of (`title`, plus `why`, which is loved, watched, requested or watchlist).
       tags:
         - search
       parameters:

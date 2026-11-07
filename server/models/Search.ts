@@ -24,6 +24,17 @@ interface SearchResult {
   overview: string;
   originalLanguage: string;
   mediaInfo?: Media;
+  // Only on AI recommendations: why it was picked
+  aiPick?: AiPick;
+}
+
+export interface AiPick {
+  reason: string;
+  // The title in their history it's based on, for "Because you watched…"
+  basedOn?: {
+    title: string;
+    why: 'loved' | 'watched' | 'requested' | 'watchlist';
+  };
 }
 
 export interface MovieResult extends SearchResult {

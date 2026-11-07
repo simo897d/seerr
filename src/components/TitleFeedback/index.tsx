@@ -6,6 +6,7 @@ import {
   CheckCircleIcon,
   HandThumbDownIcon,
   HandThumbUpIcon,
+  MinusCircleIcon,
 } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { useState } from 'react';
@@ -16,11 +17,12 @@ const messages = defineMessages('components.TitleFeedback', {
   prompt: 'Seen it? Tell the AI what you thought',
   watched: 'Watched',
   liked: 'Loved it',
+  meh: 'It was OK',
   disliked: 'Not for me',
   saveFailed: 'Something went wrong while saving your rating.',
 });
 
-type Status = 'watched' | 'liked' | 'disliked';
+type Status = 'watched' | 'liked' | 'meh' | 'disliked';
 
 interface TitleFeedbackProps {
   mediaType: 'movie' | 'tv';
@@ -29,7 +31,8 @@ interface TitleFeedbackProps {
 
 /**
  * Lets users mark a title as watched (e.g. seen outside the media server)
- * and give it a thumbs up or down, to tailor their AI recommendations.
+ * and say whether they loved it, found it OK or didn't like it, to tailor
+ * their AI recommendations.
  */
 const TitleFeedback = ({ mediaType, tmdbId }: TitleFeedbackProps) => {
   const intl = useIntl();
@@ -73,7 +76,7 @@ const TitleFeedback = ({ mediaType, tmdbId }: TitleFeedbackProps) => {
     label: string;
     icon: React.ReactNode;
     active: boolean;
-    activeType: 'primary' | 'success' | 'danger';
+    activeType: 'primary' | 'success' | 'warning' | 'danger';
   }[] = [
     {
       status: 'watched',
@@ -88,6 +91,13 @@ const TitleFeedback = ({ mediaType, tmdbId }: TitleFeedbackProps) => {
       icon: <HandThumbUpIcon />,
       active: data.status === 'liked',
       activeType: 'success',
+    },
+    {
+      status: 'meh',
+      label: intl.formatMessage(messages.meh),
+      icon: <MinusCircleIcon />,
+      active: data.status === 'meh',
+      activeType: 'warning',
     },
     {
       status: 'disliked',

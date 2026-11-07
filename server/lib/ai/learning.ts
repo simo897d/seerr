@@ -135,6 +135,8 @@ export const updateSuggestionOutcomes = async (
           SuggestionOutcome.REQUESTED,
           // A skipped pick they get round to later still counts
           SuggestionOutcome.SKIPPED,
+          // A watched pick can still be rated down afterwards
+          SuggestionOutcome.WATCHED,
         ]),
       },
     });
@@ -169,6 +171,14 @@ export const updateSuggestionOutcomes = async (
         const key = keyOf(suggestion.mediaType, suggestion.tmdbId);
         const rating = rated.get(key)?.status;
         let outcome = suggestion.outcome;
+
+        // Watched stays watched, unless they rate it down later
+        if (
+          outcome === SuggestionOutcome.WATCHED &&
+          rating !== FeedbackStatus.DISLIKED
+        ) {
+          continue;
+        }
 
         if (rating === FeedbackStatus.DISLIKED) {
           outcome = SuggestionOutcome.DISLIKED;

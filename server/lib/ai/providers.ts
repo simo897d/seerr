@@ -12,6 +12,8 @@ export const RecommendationListSchema = z.object({
       year: z.number().int().nullable(),
       mediaType: z.enum(['movie', 'tv']),
       reason: z.string(),
+      // The title in their history it's based on, for "Because you watched…"
+      basedOn: z.string().nullable(),
     })
   ),
 });
@@ -52,6 +54,10 @@ const LooseRecommendationListSchema = z.object({
           /tv|series|show/i.test(type) ? ('tv' as const) : ('movie' as const)
         ),
       reason: z.string().optional().default(''),
+      basedOn: z
+        .string()
+        .nullish()
+        .transform((title) => title || null),
     })
   ),
 });
@@ -362,6 +368,7 @@ const LooseChatReplySchema = z.object({
     .array(
       LooseRecommendationListSchema.shape.recommendations.element.omit({
         reason: true,
+        basedOn: true,
       })
     )
     .optional()

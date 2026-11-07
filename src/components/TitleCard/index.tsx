@@ -23,7 +23,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { MediaStatus } from '@server/constants/media';
 import type { Watchlist } from '@server/entity/Watchlist';
-import type { MediaType } from '@server/models/Search';
+import type { AiPick, MediaType } from '@server/models/Search';
 import axios from 'axios';
 import Link from 'next/link';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -43,6 +43,8 @@ interface TitleCardProps {
   inProgress?: boolean;
   isAddedToWatchlist?: number | boolean;
   mutateParent?: () => void;
+  // AI recommendations show what in your history the pick is based on
+  aiPick?: AiPick;
 }
 
 const messages = defineMessages('components.TitleCard', {
@@ -53,7 +55,18 @@ const messages = defineMessages('components.TitleCard', {
     '<strong>{title}</strong> Removed from watchlist  successfully!',
   watchlistCancel: 'watchlist for <strong>{title}</strong> canceled.',
   watchlistError: 'Something went wrong. Please try again.',
+  becauseLoved: 'Because you loved {title}',
+  becauseWatched: 'Because you watched {title}',
+  becauseRequested: 'Because you requested {title}',
+  becauseWatchlist: 'Because {title} is on your watchlist',
 });
+
+const becauseMessages = {
+  loved: messages.becauseLoved,
+  watched: messages.becauseWatched,
+  requested: messages.becauseRequested,
+  watchlist: messages.becauseWatchlist,
+};
 
 const TitleCard = ({
   id,
@@ -67,6 +80,7 @@ const TitleCard = ({
   inProgress = false,
   canExpand = false,
   mutateParent,
+  aiPick,
 }: TitleCardProps) => {
   const isTouch = useIsTouch();
   const intl = useIntl();
@@ -579,6 +593,19 @@ const TitleCard = ({
           </Transition>
         </div>
       </div>
+      {aiPick?.basedOn && (
+        <Tooltip content={aiPick.reason} className="max-w-xs whitespace-normal">
+          <div className="mt-2 line-clamp-2 px-1 text-xs text-gray-400">
+            {intl.formatMessage(becauseMessages[aiPick.basedOn.why], {
+              title: (
+                <span className="font-medium text-gray-200">
+                  {aiPick.basedOn.title}
+                </span>
+              ),
+            })}
+          </div>
+        </Tooltip>
+      )}
     </div>
   );
 };

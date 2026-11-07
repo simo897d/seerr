@@ -29,9 +29,19 @@ import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { getHostname } from '@server/utils/getHostname';
 
-export type ResolvedRecommendation =
-  | { mediaType: 'movie'; reason: string; result: TmdbMovieResult }
-  | { mediaType: 'tv'; reason: string; result: TmdbTvResult };
+/** The title in their history a pick was based on, for "Because you watched…" */
+export interface BasedOn {
+  title: string;
+  why: 'loved' | 'watched' | 'requested' | 'watchlist';
+}
+
+export type ResolvedRecommendation = {
+  reason: string;
+  basedOn?: BasedOn;
+} & (
+  | { mediaType: 'movie'; result: TmdbMovieResult }
+  | { mediaType: 'tv'; result: TmdbTvResult }
+);
 
 interface TasteItem {
   title: string;
@@ -43,10 +53,14 @@ interface TasteItem {
   // For earlier AI picks: what they did with it, and why it was picked
   outcome?: SuggestionOutcome;
   reason?: string;
+  // How they rated an earlier pick they watched
+  rating?: FeedbackStatus;
 }
 
 export interface TasteProfile {
   liked: TasteItem[];
+  // Watched and rated "it was OK"
+  meh: TasteItem[];
   disliked: TasteItem[];
   watched: TasteItem[];
   seenElsewhere: TasteItem[];
@@ -275,17 +289,28 @@ export const buildTasteProfile = async (
       );
     },
   });
-  const fromSuggestion = (item: AiSuggestion): TasteItem => ({
-    title: item.title,
-    type: item.mediaType === MediaType.MOVIE ? 'movie' : 'tv',
-    year: item.year ?? undefined,
-    tmdbId: item.tmdbId,
-    outcome: item.outcome,
-    reason: item.reason,
-  });
+  const ratings = new Map(
+    feedback.map((item) => [
+      itemKey(feedbackType(item), item.tmdbId),
+      item.status,
+    ])
+  );
+  const fromSuggestion = (item: AiSuggestion): TasteItem => {
+    const type = item.mediaType === MediaType.MOVIE ? 'movie' : 'tv';
+    return {
+      title: item.title,
+      type,
+      year: item.year ?? undefined,
+      tmdbId: item.tmdbId,
+      outcome: item.outcome,
+      reason: item.reason,
+      rating: ratings.get(itemKey(type, item.tmdbId)),
+    };
+  };
 
   return {
     liked: byStatus(FeedbackStatus.LIKED).slice(0, 40),
+    meh: byStatus(FeedbackStatus.MEH).slice(0, 40),
     disliked: byStatus(FeedbackStatus.DISLIKED).slice(0, 40),
     seenElsewhere: byStatus(FeedbackStatus.WATCHED).slice(0, 60),
     watched: history
@@ -319,7 +344,13 @@ const formatItem = (item: TasteItem) => {
     parts.push('FAVORITE');
   }
   if (item.outcome === SuggestionOutcome.WATCHED) {
-    parts.push('they watched it');
+    parts.push(
+      item.rating === FeedbackStatus.LIKED
+        ? 'they watched it and loved it'
+        : item.rating === FeedbackStatus.MEH
+          ? 'they watched it, it was just OK'
+          : 'they watched it'
+    );
   } else if (item.outcome === SuggestionOutcome.REQUESTED) {
     parts.push('they requested it');
   }
@@ -336,11 +367,13 @@ Guidelines:
 - Infer their taste from the whole history: genres, tone, themes, era, creators and pacing. Weight favorites and recent items most.
 - Only suggest real, released titles that are listed on The Movie Database, using their original English title and first release year so they can be looked up.
 - Titles they rated thumbs up are the strongest signal of their taste. Titles they rated thumbs down show what to steer away from, so avoid close matches to those.
+- Titles they rated "it was OK" are a weak signal: they didn't mind them but weren't excited, so don't build picks around them.
 - Never suggest anything that already appears anywhere in what you are given, including titles they disliked or have seen elsewhere.
 - If you are shown your earlier picks, learn from them: lean toward what the picks they went for have in common, and away from what the picks they passed on have in common.
 - Mix well-known picks with less obvious ones they probably haven't seen. Avoid only suggesting the most popular titles of all time.
 - Match the movie/TV balance of their history, but include some of each when the history has both.
 - Keep each reason to one short sentence that names what in their history it connects to.
+- In "basedOn", give the one title from their history that the pick connects to most, written exactly as it appears above without the year. Only use a title they loved, watched, requested or put on their watchlist, never one they disliked, found just OK or passed on. Use null when no single title fits.
 - Respond with JSON only.`;
 
 export const KIDS_PROMPT = `
@@ -354,6 +387,11 @@ export const formatTasteProfile = (profile: TasteProfile) => {
 
   if (profile.liked.length) {
     sections.push(`Rated thumbs up (loved these):\n${list(profile.liked)}`);
+  }
+  if (profile.meh.length) {
+    sections.push(
+      `Rated "it was OK" (fine, but didn't excite them):\n${list(profile.meh)}`
+    );
   }
   if (profile.disliked.length) {
     sections.push(
@@ -402,6 +440,7 @@ export const formatTasteProfile = (profile: TasteProfile) => {
 
 const allItems = (profile: TasteProfile) => [
   ...profile.liked,
+  ...profile.meh,
   ...profile.disliked,
   ...profile.watched,
   ...profile.seenElsewhere,
@@ -436,11 +475,62 @@ const buildPrompt = (
 Suggest ${askFor} titles for this person. Write the reasons in the language with code "${language}".
 
 Return a JSON object shaped like:
-{"recommendations": [{"title": "...", "year": 2014, "mediaType": "movie" or "tv", "reason": "..."}]}`;
+{"recommendations": [{"title": "...", "year": 2014, "mediaType": "movie" or "tv", "reason": "...", "basedOn": "..." or null}]}`;
+
+/**
+ * Turns the AI's "basedOn" into a title from their history, or nothing if it
+ * doesn't name one we gave it (or one that wouldn't make a good "because").
+ */
+export const basedOnFinder = (profile: TasteProfile) => {
+  const titles = new Map<string, BasedOn>();
+  // Never "because" of something they didn't like or were lukewarm about
+  const blocked = new Set(
+    [...profile.disliked, ...profile.meh, ...profile.passedOn].map((item) =>
+      normalizeTitle(item.title)
+    )
+  );
+  const add = (items: TasteItem[], why: BasedOn['why']) => {
+    for (const item of items) {
+      const key = normalizeTitle(item.title);
+      if (key && !blocked.has(key) && !titles.has(key)) {
+        titles.set(key, { title: item.title, why });
+      }
+    }
+  };
+  // Strongest reason first, in case a title is in more than one list
+  add(profile.liked, 'loved');
+  add(
+    profile.pickedUp.filter((item) => item.rating === FeedbackStatus.LIKED),
+    'loved'
+  );
+  add(profile.watched, 'watched');
+  add(profile.seenElsewhere, 'watched');
+  add(
+    profile.pickedUp.filter(
+      (item) =>
+        item.outcome === SuggestionOutcome.WATCHED &&
+        item.rating !== FeedbackStatus.MEH
+    ),
+    'watched'
+  );
+  add(profile.requested, 'requested');
+  add(
+    profile.pickedUp.filter(
+      (item) => item.outcome === SuggestionOutcome.REQUESTED
+    ),
+    'requested'
+  );
+  add(profile.watchlist, 'watchlist');
+
+  return (basedOn?: string | null): BasedOn | undefined =>
+    basedOn
+      ? titles.get(normalizeTitle(basedOn.replace(/\s*\(\d{4}\)\s*$/, '')))
+      : undefined;
+};
 
 export const findOnTmdb = async (
   tmdb: TheMovieDb,
-  suggestion: AiRecommendation
+  suggestion: Omit<AiRecommendation, 'basedOn'>
 ): Promise<ResolvedRecommendation | undefined> => {
   const wanted = normalizeTitle(suggestion.title);
   const year = suggestion.year ?? undefined;
@@ -543,13 +633,18 @@ const generate = async (
   );
 
   const { ids: knownIds, titles: knownTitles } = profileKeys(profile);
+  const findBasedOn = basedOnFinder(profile);
 
   const resolved = await mapWithConcurrency(
     suggestions.filter(
       (s) => !knownTitles.has(`${s.mediaType}-${normalizeTitle(s.title)}`)
     ),
     5,
-    (suggestion) => findOnTmdb(tmdb, suggestion)
+    async (suggestion) => {
+      const item = await findOnTmdb(tmdb, suggestion);
+      const basedOn = findBasedOn(suggestion.basedOn);
+      return item && basedOn ? { ...item, basedOn } : item;
+    }
   );
 
   const seen = new Set<string>();

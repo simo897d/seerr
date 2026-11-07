@@ -836,9 +836,11 @@ discoverRoutes.get('/recommended', async (req, res, next) => {
           (med) => med.tmdbId === item.result.id && med.mediaType === type
         );
 
+        const aiPick = { reason: item.reason, basedOn: item.basedOn };
+
         return item.mediaType === 'movie'
-          ? mapMovieResult(item.result, selectedMedia)
-          : mapTvResult(item.result, selectedMedia);
+          ? { ...mapMovieResult(item.result, selectedMedia), aiPick }
+          : { ...mapTvResult(item.result, selectedMedia), aiPick };
       }),
     });
   } catch (e) {

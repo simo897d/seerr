@@ -143,6 +143,7 @@ const MediaSlider = ({
               year={title.releaseDate}
               mediaType={title.mediaType}
               inProgress={(title.mediaInfo?.downloadStatus ?? []).length > 0}
+              aiPick={title.aiPick}
             />
           );
         case 'tv':
@@ -159,6 +160,7 @@ const MediaSlider = ({
               year={title.firstAirDate}
               mediaType={title.mediaType}
               inProgress={(title.mediaInfo?.downloadStatus ?? []).length > 0}
+              aiPick={title.aiPick}
             />
           );
         case 'person':
